@@ -199,5 +199,5 @@ func getFullVersion(path, majorVersion string) string {
 		log.Fatalf("Error executing 'go list -m -f {{.Version}}' command: %s", err)
 	}
 
-	return string(version)
+	return strings.TrimSpace(string(version))
 }
