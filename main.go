@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/module"
+	"golang.org/x/mod/semver"
 )
 
 var (
@@ -41,18 +42,24 @@ func main() {
 	}
 
 	// Validate and parse the module path
+	if err := module.CheckPath(path); err != nil {
+		log.Fatalf("Invalid module path %s: %s", path, err)
+	}
+
 	prefix, currentMajor, ok := module.SplitPathVersion(path)
 	if !ok {
 		log.Fatalf("Invalid module path: %s", path)
 	}
 
-	// If no target major version was given, call 'go list -m'
-	// to find the highest available major version
-	// TODO: Validate target major
-	targetMajor := flag.Arg(1)
-	if targetMajor == "" {
-		targetMajor = getTargetMajor(prefix, currentMajor)
+	targetVersion := flag.Arg(1)
+	if targetVersion == "" {
+		// If no target major version was given, call 'go list -m'
+		// to find the highest available major version
+		targetVersion = getTargetVersion(prefix, currentMajor)
+	} else if !semver.IsValid(targetVersion) {
+		log.Fatalf("Invalid target version: %s", targetVersion)
 	}
+	targetMajor := semver.Major(targetVersion)
 
 	// Figure out what the post-upgrade module path should be
 	var newPath string
@@ -95,7 +102,7 @@ func main() {
 
 	// Get the full version for the upgraded dependency
 	// (with the highest available minor/patch version)
-	version := getFullVersion(newPath, targetMajor)
+	version := getFullVersion(newPath, targetVersion)
 
 	// Drop the old module dependency and add the new, upgraded one
 	if err := file.DropRequire(path); err != nil {
@@ -118,7 +125,7 @@ func main() {
 
 const batchSize = 25
 
-func getTargetMajor(prefix, currentMajor string) string {
+func getTargetVersion(prefix, currentMajor string) string {
 	// We're always upgrading, so start at v2
 	version := 2
 
@@ -132,7 +139,7 @@ func getTargetMajor(prefix, currentMajor string) string {
 		version++
 	}
 
-	var majorVersion string
+	var targetVersion string
 	for {
 		// Make batched calls to 'go list -m' for
 		// better performance (ideally, a single call).
@@ -170,15 +177,15 @@ func getTargetMajor(prefix, currentMajor string) string {
 			// incompatible pre-module versions from errors due to unavailable
 			// (i.e. not yet released) versions.
 			if result.Error.Err == "" {
-				majorVersion = strings.Split(result.Version, ".")[0]
+				targetVersion = result.Version
 			} else if strings.Contains(result.Error.Err, "no matching versions for query") {
-				if majorVersion == "" {
-					log.Fatalf("No major versions available for upgrade")
+				if targetVersion == "" {
+					log.Fatalf("No versions available for upgrade")
 				}
 				if *verbose {
-					fmt.Printf("Found major version: %s/%s\n", prefix, majorVersion)
+					fmt.Printf("Found target version: %s/%s\n", prefix, targetVersion)
 				}
-				return majorVersion
+				return targetVersion
 			} else if *verbose {
 				fmt.Println(result.Error.Err)
 			}
@@ -186,10 +193,10 @@ func getTargetMajor(prefix, currentMajor string) string {
 	}
 }
 
-func getFullVersion(path, majorVersion string) string {
+func getFullVersion(path, targetVersion string) string {
 	cmd := exec.CommandContext(context.Background(),
 		"go", "list", "-m", "-f", "{{.Version}}",
-		fmt.Sprintf("%s@%s", path, majorVersion),
+		fmt.Sprintf("%s@%s", path, targetVersion),
 	)
 	version, err := cmd.Output()
 	if err != nil {
