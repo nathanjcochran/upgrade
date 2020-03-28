@@ -1,4 +1,4 @@
-module github.com/nathanjcochran/gomod
+module github.com/nathanjcochran/upgrade
 
 go 1.13
 
