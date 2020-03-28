@@ -39,46 +39,53 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	targetMajor := flag.Arg(1)
 
+	// Validate and parse the module path
+	prefix, currentMajor, ok := module.SplitPathVersion(path)
+	if !ok {
+		log.Fatalf("Invalid module path: %s", path)
+	}
+
+	// If no target major version was given, call 'go list -m'
+	// to find the highest available major version
+	// TODO: Validate target major
+	targetMajor := flag.Arg(1)
+	if targetMajor == "" {
+		targetMajor = getTargetMajor(prefix, currentMajor)
+	}
+
+	// Figure out what the post-upgrade module path should be
+	var newPath string
+	switch targetMajor {
+	case "v0", "v1":
+		newPath = prefix
+	default:
+		newPath = fmt.Sprintf("%s/%s", prefix, targetMajor)
+	}
+
+	// Read and parse the go.mod file
 	b, err := ioutil.ReadFile(*filePath)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Error reading module file %s: %s", *filePath, err)
 	}
 
 	file, err := modfile.Parse(*filePath, b, nil)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Error parsing module file %s: %s", *filePath, err)
 	}
 
 	//out, err := json.MarshalIndent(file, "", "  ")
 	//if err != nil {
-	//	log.Fatal(err)
+	//	log.Fatalf("Error marshaling module file to JSON: %s", err)
 	//}
 	//fmt.Printf("%s\n", string(out))
 
+	// Make sure the given module is actually a dependency in the go.mod file
 	found := false
 	for _, require := range file.Require {
 		if require.Mod.Path == path {
 			found = true
-			prefix, currentMajor, ok := module.SplitPathVersion(require.Mod.Path)
-			if !ok {
-				log.Fatal("Invalid module path in go.mod file: %s", require.Mod.Path)
-			}
-
-			if targetMajor == "" {
-				targetMajor = getTargetMajor(prefix, currentMajor)
-			}
-
-			newPath := fmt.Sprintf("%s/%s", prefix, targetMajor)
-			file.SetRequire([]*modfile.Require{
-				&modfile.Require{
-					Mod: module.Version{
-						Path:    newPath,
-						Version: getMinorVersion(newPath, targetMajor),
-					},
-				},
-			})
+			break
 		}
 	}
 
@@ -86,17 +93,27 @@ func main() {
 		log.Fatalf("Module not a known dependency: %s", path)
 	}
 
+	// Get the full version for the upgraded dependency
+	// (with the highest available minor/patch version)
+	version := getFullVersion(newPath, targetMajor)
+
+	// Drop the old module dependency and add the new, upgraded one
+	if err := file.DropRequire(path); err != nil {
+		log.Fatalf("Error dropping module requirement %s: %s", path, err)
+	}
+	if err := file.AddRequire(newPath, version); err != nil {
+		log.Fatalf("Error adding module requirement %s: %s", newPath, err)
+	}
+
 	file.Cleanup()
 	out, err := file.Format()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Error formatting module file: %s", err)
 	}
 
-	fmt.Println(string(out))
-
-	//if err := ioutil.WriteFile("go.mod", out, 0644); err != nil {
-	//	log.Fatal(err)
-	//}
+	if err := ioutil.WriteFile(*filePath, out, 0644); err != nil {
+		log.Fatalf("Error writing module file %s: %s", *filePath, err)
+	}
 }
 
 const batchSize = 25
@@ -110,7 +127,7 @@ func getTargetMajor(prefix, currentMajor string) string {
 	if currentMajor != "" {
 		version, err := strconv.Atoi(currentMajor[1:])
 		if err != nil {
-			log.Fatal(err)
+			log.Fatalf("Invalid major version '%s': %s", currentMajor, err)
 		}
 		version++
 	}
@@ -133,7 +150,7 @@ func getTargetMajor(prefix, currentMajor string) string {
 		)
 		out, err := cmd.Output()
 		if err != nil {
-			log.Fatal(err)
+			log.Fatalf("Error executing 'go list -m -e -json' command: %s", err)
 		}
 
 		decoder := json.NewDecoder(bytes.NewReader(out))
@@ -145,7 +162,7 @@ func getTargetMajor(prefix, currentMajor string) string {
 				}
 			}
 			if err := decoder.Decode(&result); err != nil {
-				log.Fatal(err)
+				log.Fatalf("Error parsing results of 'go list -m -e -json' command: %s", err)
 			}
 
 			// TODO: Checking the content of the error message is hacky,
@@ -156,7 +173,7 @@ func getTargetMajor(prefix, currentMajor string) string {
 				majorVersion = strings.Split(result.Version, ".")[0]
 			} else if strings.Contains(result.Error.Err, "no matching versions for query") {
 				if majorVersion == "" {
-					log.Fatal("No major versions available for upgrade")
+					log.Fatalf("No major versions available for upgrade")
 				}
 				if *verbose {
 					fmt.Printf("Found major version: %s/%s\n", prefix, majorVersion)
@@ -169,17 +186,17 @@ func getTargetMajor(prefix, currentMajor string) string {
 	}
 }
 
-func getMinorVersion(path, pathMajor string) string {
+func getFullVersion(path, majorVersion string) string {
 	cmd := exec.CommandContext(context.Background(),
 		"go", "list", "-m", "-f", "{{.Version}}",
-		fmt.Sprintf("%s@%s", path, pathMajor),
+		fmt.Sprintf("%s@%s", path, majorVersion),
 	)
 	version, err := cmd.Output()
 	if err != nil {
 		if err := err.(*exec.ExitError); err != nil {
 			fmt.Println(string(err.Stderr))
 		}
-		log.Fatal(err)
+		log.Fatalf("Error executing 'go list -m -f {{.Version}}' command: %s", err)
 	}
 
 	return string(version)
