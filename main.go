@@ -60,19 +60,20 @@ func upgradeOne(modulePath, upgradeVersion string) {
 	case "":
 		// If no target major version was given, call 'go list -m'
 		// to find the highest available major version
-		upgradeVersion, err := GetUpgradeVersion(modulePath)
+		var err error
+		upgradeVersion, err = GetUpgradeVersion(modulePath)
 		if err != nil {
-			log.Fatalf("Error finding target version: %s", err)
+			log.Fatalf("Error finding upgrade version: %s", err)
 		}
 		if upgradeVersion == "" {
 			log.Fatalf("No versions available for upgrade")
 		}
 		if *verbose {
-			fmt.Printf("Found target version: %s\n", upgradeVersion)
+			fmt.Printf("Upgrade version: %s\n", upgradeVersion)
 		}
 	default:
 		if !semver.IsValid(upgradeVersion) {
-			log.Fatalf("Invalid target version: %s", upgradeVersion)
+			log.Fatalf("Invalid upgrade version: %s", upgradeVersion)
 		}
 	}
 
@@ -83,6 +84,9 @@ func upgradeOne(modulePath, upgradeVersion string) {
 			modulePath, upgradeVersion, err,
 		)
 	}
+	if *verbose {
+		fmt.Printf("Upgrade path: %s\n", newPath)
+	}
 
 	// Get the full version for the upgraded dependency
 	// (with the highest available minor/patch version)
@@ -90,6 +94,9 @@ func upgradeOne(modulePath, upgradeVersion string) {
 		upgradeVersion, err = GetFullVersion(newPath, upgradeVersion)
 		if err != nil {
 			log.Fatalf("Error getting full upgrade version: %s", err)
+		}
+		if *verbose {
+			fmt.Printf("Upgrade version: %s\n", upgradeVersion)
 		}
 	}
 
@@ -123,6 +130,9 @@ func upgradeOne(modulePath, upgradeVersion string) {
 	if !found {
 		log.Fatalf("Module not a known dependency: %s", modulePath)
 	}
+
+	fmt.Printf("Old: %s\n", modulePath)
+	fmt.Printf("New: %s\n", newPath)
 
 	// Rewrite import paths in files
 	rewriteImports(modulePath, newPath)
@@ -226,7 +236,6 @@ func UpgradePath(path, version string) (string, error) {
 const batchSize = 25
 
 func GetUpgradeVersion(path string) (string, error) {
-
 	// Split module path
 	prefix, pathMajor, ok := module.SplitPathVersion(path)
 	if !ok {
@@ -266,6 +275,9 @@ func GetUpgradeVersion(path string) (string, error) {
 		)
 		out, err := cmd.Output()
 		if err != nil {
+			if err := err.(*exec.ExitError); err != nil {
+				fmt.Println(string(err.Stderr))
+			}
 			return "", fmt.Errorf("error executing 'go list -m -e -json' command: %s", err)
 		}
 
@@ -326,7 +338,7 @@ func rewriteImports(oldPath, newPath string) {
 
 	for _, pkg := range pkgs {
 		if *verbose {
-			fmt.Println(pkg.Name)
+			fmt.Printf("Package: %s\n", pkg.Name)
 		}
 		for i, fileAST := range pkg.Syntax {
 			filename := pkg.CompiledGoFiles[i]
