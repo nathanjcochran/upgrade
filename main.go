@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path"
 	"strconv"
 	"strings"
 
@@ -21,13 +22,13 @@ import (
 )
 
 var (
-	filePath = flag.String("f", "./go.mod", "go.mod file path") // TODO: Just take path to module root
-	verbose  = flag.Bool("v", false, "verbose output")
+	dir     = flag.String("d", ".", "Module directory path")
+	verbose = flag.Bool("v", false, "verbose output")
 )
 
 func main() {
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [-f modfile path] [-v] module [version]:\n\n", os.Args[0])
+		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [-d module directory] [-v] module [version]:\n\n", os.Args[0])
 		fmt.Fprintf(flag.CommandLine.Output(), "Upgrades the named module dependency to the specified version,\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "or, if no version is given, to the highest major version available.\n\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "The module should be given as a fully qualified module path\n")
@@ -37,29 +38,29 @@ func main() {
 	}
 	flag.Parse()
 
-	path := flag.Arg(0)
-	if path == "" {
+	modulePath := flag.Arg(0)
+	switch modulePath {
+	case "":
 		flag.Usage()
 		os.Exit(2)
-	}
-
-	// If the module path is "all", upgrade all
-	// modules with a higher available version.
-	if path == "all" {
+	case "all":
 		upgradeAll()
-		return
+	default:
+		upgradeOne(modulePath, flag.Arg(1))
 	}
+}
 
+func upgradeOne(modulePath, upgradeVersion string) {
 	// Validate and parse the module path
-	if err := module.CheckPath(path); err != nil {
-		log.Fatalf("Invalid module path %s: %s", path, err)
+	if err := module.CheckPath(modulePath); err != nil {
+		log.Fatalf("Invalid module path %s: %s", modulePath, err)
 	}
 
-	upgradeVersion := flag.Arg(1)
-	if upgradeVersion == "" {
+	switch upgradeVersion {
+	case "":
 		// If no target major version was given, call 'go list -m'
 		// to find the highest available major version
-		upgradeVersion, err := GetUpgradeVersion(path)
+		upgradeVersion, err := GetUpgradeVersion(modulePath)
 		if err != nil {
 			log.Fatalf("Error finding target version: %s", err)
 		}
@@ -69,27 +70,39 @@ func main() {
 		if *verbose {
 			fmt.Printf("Found target version: %s\n", upgradeVersion)
 		}
-	} else if !semver.IsValid(upgradeVersion) {
-		log.Fatalf("Invalid target version: %s", upgradeVersion)
+	default:
+		if !semver.IsValid(upgradeVersion) {
+			log.Fatalf("Invalid target version: %s", upgradeVersion)
+		}
 	}
 
 	// Figure out what the post-upgrade module path should be
-	newPath, err := UpgradePath(path, upgradeVersion)
+	newPath, err := UpgradePath(modulePath, upgradeVersion)
 	if err != nil {
 		log.Fatalf("Error upgrading module path %s to %s: %s",
-			path, upgradeVersion, err,
+			modulePath, upgradeVersion, err,
 		)
 	}
 
-	// Read and parse the go.mod file
-	b, err := ioutil.ReadFile(*filePath)
-	if err != nil {
-		log.Fatalf("Error reading module file %s: %s", *filePath, err)
+	// Get the full version for the upgraded dependency
+	// (with the highest available minor/patch version)
+	if module.CanonicalVersion(upgradeVersion) != upgradeVersion {
+		upgradeVersion, err = GetFullVersion(newPath, upgradeVersion)
+		if err != nil {
+			log.Fatalf("Error getting full upgrade version: %s", err)
+		}
 	}
 
-	file, err := modfile.Parse(*filePath, b, nil)
+	// Read and parse the go.mod file
+	filePath := path.Join(*dir, "go.mod")
+	b, err := ioutil.ReadFile(filePath)
 	if err != nil {
-		log.Fatalf("Error parsing module file %s: %s", *filePath, err)
+		log.Fatalf("Error reading module file %s: %s", filePath, err)
+	}
+
+	file, err := modfile.Parse(filePath, b, nil)
+	if err != nil {
+		log.Fatalf("Error parsing module file %s: %s", filePath, err)
 	}
 
 	//out, err := json.MarshalIndent(file, "", "  ")
@@ -101,32 +114,24 @@ func main() {
 	// Make sure the given module is actually a dependency in the go.mod file
 	found := false
 	for _, require := range file.Require {
-		if require.Mod.Path == path {
+		if require.Mod.Path == modulePath {
 			found = true
 			break
 		}
 	}
 
 	if !found {
-		log.Fatalf("Module not a known dependency: %s", path)
+		log.Fatalf("Module not a known dependency: %s", modulePath)
 	}
 
 	// Rewrite import paths in files
-	rewriteImports(path, newPath)
-
-	// Get the full version for the upgraded dependency
-	// (with the highest available minor/patch version)
-	// TODO: Only if upgradeVersion is not already fully qualified
-	version, err := getFullVersion(newPath, upgradeVersion)
-	if err != nil {
-		log.Fatalf("Error getting full upgrade version: %s", err)
-	}
+	rewriteImports(modulePath, newPath)
 
 	// Drop the old module dependency and add the new, upgraded one
-	if err := file.DropRequire(path); err != nil {
-		log.Fatalf("Error dropping module requirement %s: %s", path, err)
+	if err := file.DropRequire(modulePath); err != nil {
+		log.Fatalf("Error dropping module requirement %s: %s", modulePath, err)
 	}
-	if err := file.AddRequire(newPath, version); err != nil {
+	if err := file.AddRequire(newPath, upgradeVersion); err != nil {
 		log.Fatalf("Error adding module requirement %s: %s", newPath, err)
 	}
 
@@ -138,21 +143,23 @@ func main() {
 		log.Fatalf("Error formatting module file: %s", err)
 	}
 
-	if err := ioutil.WriteFile(*filePath, out, 0644); err != nil {
-		log.Fatalf("Error writing module file %s: %s", *filePath, err)
+	if err := ioutil.WriteFile(filePath, out, 0644); err != nil {
+		log.Fatalf("Error writing module file %s: %s", filePath, err)
 	}
+
 }
 
 func upgradeAll() {
 	// Read and parse the go.mod file
-	b, err := ioutil.ReadFile(*filePath)
+	filePath := path.Join(*dir, "go.mod")
+	b, err := ioutil.ReadFile(filePath)
 	if err != nil {
-		log.Fatalf("Error reading module file %s: %s", *filePath, err)
+		log.Fatalf("Error reading module file %s: %s", filePath, err)
 	}
 
-	file, err := modfile.Parse(*filePath, b, nil)
+	file, err := modfile.Parse(filePath, b, nil)
 	if err != nil {
-		log.Fatalf("Error parsing module file %s: %s", *filePath, err)
+		log.Fatalf("Error parsing module file %s: %s", filePath, err)
 	}
 
 	// For each requirement, check if there is a higher major version available
@@ -197,8 +204,8 @@ func upgradeAll() {
 		log.Fatalf("Error formatting module file: %s", err)
 	}
 
-	if err := ioutil.WriteFile(*filePath, out, 0644); err != nil {
-		log.Fatalf("Error writing module file %s: %s", *filePath, err)
+	if err := ioutil.WriteFile(filePath, out, 0644); err != nil {
+		log.Fatalf("Error writing module file %s: %s", filePath, err)
 	}
 }
 
@@ -289,12 +296,12 @@ func GetUpgradeVersion(path string) (string, error) {
 	}
 }
 
-func getFullVersion(path, upgradeVersion string) (string, error) {
+func GetFullVersion(path, version string) (string, error) {
 	cmd := exec.CommandContext(context.Background(),
 		"go", "list", "-m", "-f", "{{.Version}}",
-		fmt.Sprintf("%s@%s", path, upgradeVersion),
+		fmt.Sprintf("%s@%s", path, version),
 	)
-	version, err := cmd.Output()
+	fullVersion, err := cmd.Output()
 	if err != nil {
 		if err := err.(*exec.ExitError); err != nil {
 			fmt.Println(string(err.Stderr))
@@ -302,12 +309,13 @@ func getFullVersion(path, upgradeVersion string) (string, error) {
 		return "", fmt.Errorf("error executing 'go list -m -f {{.Version}}' command: %s", err)
 	}
 
-	return strings.TrimSpace(string(version)), nil
+	return strings.TrimSpace(string(fullVersion)), nil
 }
 
 func rewriteImports(oldPath, newPath string) {
 	cfg := &packages.Config{Mode: packages.LoadSyntax}
-	pkgs, err := packages.Load(cfg, "./...") // TODO: Take as arg
+	loadPath := fmt.Sprintf("%s/...", path.Clean(*dir))
+	pkgs, err := packages.Load(cfg, loadPath)
 	if err != nil {
 		log.Fatalf("Error loading package info: %s", err)
 	}
