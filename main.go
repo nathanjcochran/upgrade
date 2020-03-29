@@ -44,7 +44,7 @@ func main() {
 	}
 
 	// If the module path is "all", upgrade all
-	// modules with an available higher version.
+	// modules with a higher available version.
 	if path == "all" {
 		upgradeAll()
 		return
@@ -55,37 +55,30 @@ func main() {
 		log.Fatalf("Invalid module path %s: %s", path, err)
 	}
 
-	prefix, currentMajor, ok := module.SplitPathVersion(path)
-	if !ok {
-		log.Fatalf("Invalid module path: %s", path)
-	}
-
-	targetVersion := flag.Arg(1)
-	if targetVersion == "" {
+	upgradeVersion := flag.Arg(1)
+	if upgradeVersion == "" {
 		// If no target major version was given, call 'go list -m'
 		// to find the highest available major version
-		targetVersion, err := getTargetVersion(prefix, currentMajor)
+		upgradeVersion, err := GetUpgradeVersion(path)
 		if err != nil {
 			log.Fatalf("Error finding target version: %s", err)
 		}
-		if targetVersion == "" {
+		if upgradeVersion == "" {
 			log.Fatalf("No versions available for upgrade")
 		}
 		if *verbose {
-			fmt.Printf("Found target version: %s/%s\n", prefix, targetVersion)
+			fmt.Printf("Found target version: %s\n", upgradeVersion)
 		}
-	} else if !semver.IsValid(targetVersion) {
-		log.Fatalf("Invalid target version: %s", targetVersion)
+	} else if !semver.IsValid(upgradeVersion) {
+		log.Fatalf("Invalid target version: %s", upgradeVersion)
 	}
-	targetMajor := semver.Major(targetVersion)
 
 	// Figure out what the post-upgrade module path should be
-	var newPath string
-	switch targetMajor {
-	case "v0", "v1":
-		newPath = prefix
-	default:
-		newPath = fmt.Sprintf("%s/%s", prefix, targetMajor)
+	newPath, err := UpgradePath(path, upgradeVersion)
+	if err != nil {
+		log.Fatalf("Error upgrading module path %s to %s: %s",
+			path, upgradeVersion, err,
+		)
 	}
 
 	// Read and parse the go.mod file
@@ -123,8 +116,8 @@ func main() {
 
 	// Get the full version for the upgraded dependency
 	// (with the highest available minor/patch version)
-	// TODO: Only if targetVersion is not already fully qualified
-	version, err := getFullVersion(newPath, targetVersion)
+	// TODO: Only if upgradeVersion is not already fully qualified
+	version, err := getFullVersion(newPath, upgradeVersion)
 	if err != nil {
 		log.Fatalf("Error getting full upgrade version: %s", err)
 	}
@@ -164,32 +157,25 @@ func upgradeAll() {
 
 	// For each requirement, check if there is a higher major version available
 	for _, require := range file.Require {
-		prefix, currentMajor, ok := module.SplitPathVersion(require.Mod.Path)
-		if !ok {
-			log.Fatalf("Invalid module path: %s", require.Mod.Path)
-		}
-
-		targetVersion, err := getTargetVersion(prefix, currentMajor)
+		upgradeVersion, err := GetUpgradeVersion(require.Mod.Path)
 		if err != nil {
 			log.Fatalf("Error getting upgrade version for module %s: %s",
 				require.Mod.Path, err,
 			)
 		}
 
-		if targetVersion == "" {
+		if upgradeVersion == "" {
 			if *verbose {
 				fmt.Printf("%s - no versions available for upgrade", require.Mod.Path)
 			}
 			continue
 		}
-		targetMajor := semver.Major(targetVersion)
 
-		var newPath string
-		switch targetMajor {
-		case "v0", "v1":
-			newPath = prefix
-		default:
-			newPath = fmt.Sprintf("%s/%s", prefix, targetMajor)
+		newPath, err := UpgradePath(require.Mod.Path, upgradeVersion)
+		if err != nil {
+			log.Fatalf("Error upgrading module path %s to %s: %s",
+				require.Mod.Path, upgradeVersion, err,
+			)
 		}
 
 		// Drop the old module dependency and add the new, upgraded one
@@ -198,7 +184,7 @@ func upgradeAll() {
 				require.Mod.Path, err,
 			)
 		}
-		if err := file.AddRequire(newPath, targetVersion); err != nil {
+		if err := file.AddRequire(newPath, upgradeVersion); err != nil {
 			log.Fatalf("Error adding module requirement %s: %s", newPath, err)
 		}
 	}
@@ -216,23 +202,46 @@ func upgradeAll() {
 	}
 }
 
+func UpgradePath(path, version string) (string, error) {
+	prefix, _, ok := module.SplitPathVersion(path)
+	if !ok {
+		return "", fmt.Errorf("invalid module path: %s", path)
+	}
+
+	major := semver.Major(version)
+	switch major {
+	case "v0", "v1":
+		return prefix, nil
+	}
+	return fmt.Sprintf("%s/%s", prefix, major), nil
+}
+
 const batchSize = 25
 
-func getTargetVersion(prefix, currentMajor string) (string, error) {
+func GetUpgradeVersion(path string) (string, error) {
+
+	// Split module path
+	prefix, pathMajor, ok := module.SplitPathVersion(path)
+	if !ok {
+		return "", fmt.Errorf("invalid module path: %s", path)
+	}
+
 	// We're always upgrading, so start at v2
 	version := 2
 
 	// If the dependency already has a major version in its
 	// import path, start there
-	if currentMajor != "" {
-		version, err := strconv.Atoi(currentMajor[1:])
+	if pathMajor != "" {
+		version, err := strconv.Atoi(strings.TrimPrefix(pathMajor, "v"))
 		if err != nil {
-			return "", fmt.Errorf("invalid major version '%s': %s", currentMajor, err)
+			return "", fmt.Errorf(
+				"invalid major version '%s': %s", pathMajor, err,
+			)
 		}
 		version++
 	}
 
-	var targetVersion string
+	var upgradeVersion string
 	for {
 		// Make batched calls to 'go list -m' for
 		// better performance (ideally, a single call).
@@ -270,9 +279,9 @@ func getTargetVersion(prefix, currentMajor string) (string, error) {
 			// incompatible pre-module versions from errors due to unavailable
 			// (i.e. not yet released) versions.
 			if result.Error.Err == "" {
-				targetVersion = result.Version
+				upgradeVersion = result.Version
 			} else if strings.Contains(result.Error.Err, "no matching versions for query") {
-				return targetVersion, nil
+				return upgradeVersion, nil
 			} else if *verbose {
 				fmt.Println(result.Error.Err)
 			}
@@ -280,10 +289,10 @@ func getTargetVersion(prefix, currentMajor string) (string, error) {
 	}
 }
 
-func getFullVersion(path, targetVersion string) (string, error) {
+func getFullVersion(path, upgradeVersion string) (string, error) {
 	cmd := exec.CommandContext(context.Background(),
 		"go", "list", "-m", "-f", "{{.Version}}",
-		fmt.Sprintf("%s@%s", path, targetVersion),
+		fmt.Sprintf("%s@%s", path, upgradeVersion),
 	)
 	version, err := cmd.Output()
 	if err != nil {
