@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"go/printer"
 	"io/ioutil"
 	"log"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/module"
 	"golang.org/x/mod/semver"
+	"golang.org/x/tools/go/packages"
 )
 
 var (
@@ -100,6 +102,9 @@ func main() {
 		log.Fatalf("Module not a known dependency: %s", path)
 	}
 
+	// Rewrite import paths in files
+	rewriteImports(path, newPath)
+
 	// Get the full version for the upgraded dependency
 	// (with the highest available minor/patch version)
 	version := getFullVersion(newPath, targetVersion)
@@ -112,7 +117,9 @@ func main() {
 		log.Fatalf("Error adding module requirement %s: %s", newPath, err)
 	}
 
+	// Format and re-write the module file
 	file.Cleanup()
+	file.SortBlocks()
 	out, err := file.Format()
 	if err != nil {
 		log.Fatalf("Error formatting module file: %s", err)
@@ -207,4 +214,50 @@ func getFullVersion(path, targetVersion string) string {
 	}
 
 	return strings.TrimSpace(string(version))
+}
+
+func rewriteImports(oldPath, newPath string) {
+	cfg := &packages.Config{Mode: packages.LoadSyntax}
+	pkgs, err := packages.Load(cfg, "./...") // TODO: Take as arg
+	if err != nil {
+		log.Fatalf("Error loading package info: %s", err)
+	}
+
+	if len(pkgs) < 1 {
+		log.Fatalf("Failed to find/load package info")
+	}
+
+	for _, pkg := range pkgs {
+		if *verbose {
+			fmt.Println(pkg.Name)
+		}
+		for i, fileAST := range pkg.Syntax {
+			filename := pkg.CompiledGoFiles[i]
+
+			var found bool
+			for _, fileImp := range fileAST.Imports {
+				importPath := strings.Trim(fileImp.Path.Value, "\"")
+				if strings.HasPrefix(importPath, oldPath) {
+					found = true
+					newImportPath := strings.Replace(importPath, oldPath, newPath, 1)
+					if *verbose {
+						fmt.Printf("%s:\n\t%s\n\t-> %s\n", filename, importPath, newImportPath)
+					}
+					fileImp.Path.Value = fmt.Sprintf("\"%s\"", newImportPath)
+				}
+			}
+			if found {
+				f, err := os.Create(filename)
+				if err != nil {
+					f.Close()
+					log.Fatalf("Error opening file %s: %s", filename, err)
+				}
+				if err := printer.Fprint(f, pkg.Fset, fileAST); err != nil {
+					f.Close()
+					log.Fatalf("Error writing to file %s: %s", filename, err)
+				}
+				f.Close()
+			}
+		}
+	}
 }
