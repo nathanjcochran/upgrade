@@ -152,12 +152,6 @@ func upgradeOne(file *modfile.File, path, version string) {
 		}
 	}
 
-	//out, err := json.MarshalIndent(file, "", "  ")
-	//if err != nil {
-	//	log.Fatalf("Error marshaling module file to JSON: %s", err)
-	//}
-	//fmt.Printf("%s\n", string(out))
-
 	// Make sure the given module is actually a dependency in the go.mod file
 	var (
 		found      = false
