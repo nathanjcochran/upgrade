@@ -405,12 +405,20 @@ func rewriteImports(upgrades []upgrade) {
 		log.Fatalf("Failed to find/load package info")
 	}
 
+	visited := map[string]bool{}
 	for _, pkg := range pkgs {
 		if *verbose {
-			fmt.Printf("Package: %s\n", pkg.Name)
+			fmt.Printf("Package: %s\n", pkg.PkgPath)
 		}
 		for i, fileAST := range pkg.Syntax {
 			filename := pkg.CompiledGoFiles[i]
+
+			// Skip this file if we've already visited it (including test
+			// packages means that some files can appear more than once)
+			if visited[filename] {
+				continue
+			}
+			visited[filename] = true
 
 			var found bool
 			for _, fileImp := range fileAST.Imports {
