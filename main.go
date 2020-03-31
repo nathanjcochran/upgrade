@@ -391,7 +391,10 @@ type upgrade struct {
 }
 
 func rewriteImports(upgrades []upgrade) {
-	cfg := &packages.Config{Mode: packages.LoadSyntax}
+	cfg := &packages.Config{
+		Mode:  packages.LoadSyntax,
+		Tests: true,
+	}
 	loadPath := fmt.Sprintf("%s/...", path.Clean(*dir))
 	pkgs, err := packages.Load(cfg, loadPath)
 	if err != nil {
