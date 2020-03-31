@@ -70,11 +70,14 @@ func main() {
 
 	path := flag.Arg(0)
 	version := flag.Arg(1)
+
 	switch path {
-	case "", "all":
-		upgradeAll(file)
+	case "", file.Module.Mod.Path:
+		upgradeModule(file, version)
+	case "all":
+		upgradeAllDependencies(file)
 	default:
-		upgradeOne(file, path, version)
+		upgradeDependency(file, path, version)
 	}
 
 	writeModFile(*dir, file)
@@ -111,7 +114,37 @@ func writeModFile(dir string, f *modfile.File) {
 	}
 }
 
-func upgradeOne(file *modfile.File, path, version string) {
+func upgradeModule(file *modfile.File, version string) {
+	path := file.Module.Mod.Path
+
+	if version != "" {
+		if !semver.IsValid(version) {
+			log.Fatalf("Invalid upgrade version: %s", version)
+		}
+
+		// Truncate the minor/patch versions
+		version = semver.Major(version)
+	}
+
+	// Figure out what the post-upgrade module path should be
+	newPath, err := upgradePath(path, version)
+	if err != nil {
+		log.Fatalf("Error upgrading module path %s to %s: %s",
+			path, version, err,
+		)
+	}
+
+	fmt.Printf("%s -> %s\n", path, newPath)
+
+	if err := file.AddModuleStmt(newPath); err != nil {
+		log.Fatalf("Error upgrading module to %s: %s", newPath, err)
+	}
+
+	// Rewrite import paths in files
+	rewriteImports([]upgrade{{oldPath: path, newPath: newPath}})
+}
+
+func upgradeDependency(file *modfile.File, path, version string) {
 	// Validate and parse the module path
 	if err := module.CheckPath(path); err != nil {
 		log.Fatalf("Invalid module path %s: %s", path, err)
@@ -122,7 +155,7 @@ func upgradeOne(file *modfile.File, path, version string) {
 		// If no target major version was given, call 'go list -m'
 		// to find the highest available major version
 		var err error
-		version, err = GetUpgradeVersion(path)
+		version, err = getUpgradeVersion(path)
 		if err != nil {
 			log.Fatalf("Error finding upgrade version: %s", err)
 		}
@@ -136,7 +169,7 @@ func upgradeOne(file *modfile.File, path, version string) {
 	}
 
 	// Figure out what the post-upgrade module path should be
-	newPath, err := UpgradePath(path, version)
+	newPath, err := upgradePath(path, version)
 	if err != nil {
 		log.Fatalf("Error upgrading module path %s to %s: %s",
 			path, version, err,
@@ -146,7 +179,7 @@ func upgradeOne(file *modfile.File, path, version string) {
 	// Get the full version for the upgraded dependency
 	// (with the highest available minor/patch version)
 	if module.CanonicalVersion(version) != version {
-		version, err = GetFullVersion(newPath, version)
+		version, err = getFullVersion(newPath, version)
 		if err != nil {
 			log.Fatalf("Error getting full upgrade version: %s", err)
 		}
@@ -180,18 +213,18 @@ func upgradeOne(file *modfile.File, path, version string) {
 	}
 
 	// Rewrite import paths in files
-	rewriteImports([]Upgrade{{OldPath: path, NewPath: newPath}})
+	rewriteImports([]upgrade{{oldPath: path, newPath: newPath}})
 }
 
-func upgradeAll(file *modfile.File) {
+func upgradeAllDependencies(file *modfile.File) {
 	// For each requirement, check if there is a higher major version available
-	var upgrades []Upgrade
+	var upgrades []upgrade
 	for _, require := range file.Require {
 		if require.Indirect {
 			continue
 		}
 
-		version, err := GetUpgradeVersion(require.Mod.Path)
+		version, err := getUpgradeVersion(require.Mod.Path)
 		if err != nil {
 			log.Fatalf("Error getting upgrade version for module %s: %s",
 				require.Mod.Path, err,
@@ -205,16 +238,16 @@ func upgradeAll(file *modfile.File) {
 			continue
 		}
 
-		newPath, err := UpgradePath(require.Mod.Path, version)
+		newPath, err := upgradePath(require.Mod.Path, version)
 		if err != nil {
 			log.Fatalf("Error upgrading module path %s to %s: %s",
 				require.Mod.Path, version, err,
 			)
 		}
 
-		upgrades = append(upgrades, Upgrade{
-			OldPath: require.Mod.Path,
-			NewPath: newPath,
+		upgrades = append(upgrades, upgrade{
+			oldPath: require.Mod.Path,
+			newPath: newPath,
 		})
 
 		fmt.Printf("%s %s -> %s %s\n", require.Mod.Path, require.Mod.Version, newPath, version)
@@ -233,10 +266,24 @@ func upgradeAll(file *modfile.File) {
 	rewriteImports(upgrades)
 }
 
-func UpgradePath(path, version string) (string, error) {
-	prefix, _, ok := module.SplitPathVersion(path)
+func upgradePath(path, version string) (string, error) {
+	prefix, pathMajor, ok := module.SplitPathVersion(path)
 	if !ok {
 		return "", fmt.Errorf("invalid module path: %s", path)
+	}
+
+	if version == "" {
+		// Upgrade to next sequential version
+		if pathMajor == "" {
+			version = "v2"
+		} else {
+			num, err := strconv.Atoi(strings.TrimPrefix(pathMajor, "v"))
+			if err != nil {
+				return "", fmt.Errorf("invalid major version in module path: %s", pathMajor)
+			}
+			num++
+			version = fmt.Sprintf("v%d", num)
+		}
 	}
 
 	major := semver.Major(version)
@@ -249,7 +296,7 @@ func UpgradePath(path, version string) (string, error) {
 
 const batchSize = 5
 
-func GetUpgradeVersion(path string) (string, error) {
+func getUpgradeVersion(path string) (string, error) {
 	// Split module path
 	prefix, pathMajor, ok := module.SplitPathVersion(path)
 	if !ok {
@@ -322,7 +369,7 @@ func GetUpgradeVersion(path string) (string, error) {
 	}
 }
 
-func GetFullVersion(path, version string) (string, error) {
+func getFullVersion(path, version string) (string, error) {
 	cmd := exec.CommandContext(context.Background(),
 		"go", "list", "-m", "-f", "{{.Version}}",
 		fmt.Sprintf("%s@%s", path, version),
@@ -338,12 +385,12 @@ func GetFullVersion(path, version string) (string, error) {
 	return strings.TrimSpace(string(fullVersion)), nil
 }
 
-type Upgrade struct {
-	OldPath string
-	NewPath string
+type upgrade struct {
+	oldPath string
+	newPath string
 }
 
-func rewriteImports(upgrades []Upgrade) {
+func rewriteImports(upgrades []upgrade) {
 	cfg := &packages.Config{Mode: packages.LoadSyntax}
 	loadPath := fmt.Sprintf("%s/...", path.Clean(*dir))
 	pkgs, err := packages.Load(cfg, loadPath)
@@ -367,14 +414,14 @@ func rewriteImports(upgrades []Upgrade) {
 				importPath := strings.Trim(fileImp.Path.Value, "\"")
 
 				for _, upgrade := range upgrades {
-					if strings.HasPrefix(importPath, upgrade.OldPath) {
+					if strings.HasPrefix(importPath, upgrade.oldPath) {
 						if !found {
 							found = true
 							if *verbose {
 								fmt.Printf("%s:\n", filename)
 							}
 						}
-						newImportPath := strings.Replace(importPath, upgrade.OldPath, upgrade.NewPath, 1)
+						newImportPath := strings.Replace(importPath, upgrade.oldPath, upgrade.newPath, 1)
 						fileImp.Path.Value = fmt.Sprintf("\"%s\"", newImportPath)
 						if *verbose {
 							fmt.Printf("\t%s -> %s\n", importPath, newImportPath)
