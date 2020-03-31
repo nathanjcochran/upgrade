@@ -186,6 +186,9 @@ func upgradeDependency(file *modfile.File, path, version string) {
 	}
 
 	// Make sure the given module is actually a dependency in the go.mod file
+	// TODO: What if the version we're upgrading to already exists as a
+	// dependency?  We should probably merge the require statements and leave
+	// the version it's currently set at.
 	var (
 		found      = false
 		oldVersion = ""
@@ -425,6 +428,10 @@ func rewriteImports(upgrades []upgrade) {
 				importPath := strings.Trim(fileImp.Path.Value, "\"")
 
 				for _, upgrade := range upgrades {
+					// TODO: This is not safe, for example if you're updating
+					// the v0/v1 version of a module to a higher version, but
+					// there is already another higher version of the same
+					// dependency (which will have the same prefix)
 					if strings.HasPrefix(importPath, upgrade.oldPath) {
 						if !found {
 							found = true
