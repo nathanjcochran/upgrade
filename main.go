@@ -312,7 +312,12 @@ func upgradePath(path, version string) (string, error) {
 	case "v0", "v1":
 		return prefix, nil
 	}
-	return fmt.Sprintf("%s/%s", prefix, major), nil
+	newPath := fmt.Sprintf("%s/%s", prefix, major)
+	if err := module.CheckPath(newPath); err != nil {
+		return "", fmt.Errorf("invalid module path after upgrade - %s: %s", newPath, err)
+
+	}
+	return newPath, nil
 }
 
 const batchSize = 5
