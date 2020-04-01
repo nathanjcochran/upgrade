@@ -457,8 +457,14 @@ func rewriteImports(upgrades []upgrade) {
 								fmt.Printf("%s:\n", filename)
 							}
 						}
+
 						newImportPath := strings.Replace(importPath, upgrade.oldPath, upgrade.newPath, 1)
+						if err := module.CheckImportPath(newImportPath); err != nil {
+							log.Fatalf("Invalid import path after modification: %s", newImportPath)
+						}
+
 						fileImp.Path.Value = fmt.Sprintf("\"%s\"", newImportPath)
+
 						if *verbose {
 							fmt.Printf("\t%s -> %s\n", importPath, newImportPath)
 						}
