@@ -199,18 +199,19 @@ func upgradeDependency(file *modfile.File, path, version string) {
 	}
 
 	// Make sure the given module is actually a dependency in the go.mod file
-	// TODO: What if the version we're upgrading to already exists as a
-	// dependency?  We should probably merge the require statements and leave
-	// the version it's currently set at.
 	var (
-		found      = false
-		oldVersion = ""
+		found       = false
+		oldVersion  = ""
+		majorExists = false
 	)
 	for _, require := range file.Require {
-		if require.Mod.Path == path {
+		switch require.Mod.Path {
+		case path:
 			found = true
 			oldVersion = require.Mod.Version
-			break
+		case newPath:
+			majorExists = true
+			version = require.Mod.Version
 		}
 	}
 
@@ -220,12 +221,16 @@ func upgradeDependency(file *modfile.File, path, version string) {
 
 	fmt.Printf("%s %s -> %s %s\n", path, oldVersion, newPath, version)
 
-	// Drop the old module dependency and add the new, upgraded one
+	// Drop the old module dependency and add the new, upgraded one (unless the
+	// new major version of the dependency already existed as a dependency, in
+	// which case, we maintain that)
 	if err := file.DropRequire(path); err != nil {
 		log.Fatalf("Error dropping module requirement %s: %s", path, err)
 	}
-	if err := file.AddRequire(newPath, version); err != nil {
-		log.Fatalf("Error adding module requirement %s: %s", newPath, err)
+	if !majorExists {
+		if err := file.AddRequire(newPath, version); err != nil {
+			log.Fatalf("Error adding module requirement %s: %s", newPath, err)
+		}
 	}
 
 	// Rewrite import paths in files
