@@ -274,6 +274,8 @@ func upgradeAllDependencies(file *modfile.File) {
 		fmt.Printf("%s %s -> %s %s\n", require.Mod.Path, require.Mod.Version, newPath, version)
 
 		// Drop the old module dependency and add the new, upgraded one
+		// TODO: Don't add the new one if the same major version already
+		// exists as a dependency
 		if err := file.DropRequire(require.Mod.Path); err != nil {
 			log.Fatalf("Error dropping module requirement %s: %s",
 				require.Mod.Path, err,
