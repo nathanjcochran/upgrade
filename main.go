@@ -411,11 +411,46 @@ func getFullVersion(path, version string) (string, error) {
 	return strings.TrimSpace(string(fullVersion)), nil
 }
 
+func getModulePath(importPath string) (string, error) {
+	cmd := exec.CommandContext(context.Background(),
+		"go", "list", "-json", importPath,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		if err := err.(*exec.ExitError); err != nil {
+			fmt.Println(string(err.Stderr))
+		}
+		return "", fmt.Errorf("error executing 'go list -f {{.Module.Path}}' command: %s", err)
+	}
+
+	var result struct {
+		Module struct {
+			Path string
+		}
+		Standard bool
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return "", fmt.Errorf("error parsing results of 'go list -json' command: %s", err)
+	}
+
+	// Standard library packages don't have a module
+	if result.Standard {
+		return importPath, nil
+	}
+
+	if result.Module.Path == "" {
+		return "", fmt.Errorf("error getting module path for import: %s", importPath)
+	}
+
+	return result.Module.Path, nil
+}
+
 type upgrade struct {
 	oldPath string
 	newPath string
 }
 
+// TODO: Use a map of upgrades instead of slice
 func rewriteImports(upgrades []upgrade) {
 	cfg := &packages.Config{
 		Mode:  packages.LoadSyntax,
@@ -431,7 +466,10 @@ func rewriteImports(upgrades []upgrade) {
 		log.Fatalf("Failed to find/load package info")
 	}
 
-	visited := map[string]bool{}
+	var (
+		filesVisited       = map[string]bool{}
+		importPathToModule = map[string]string{} // Cache of module paths
+	)
 	for _, pkg := range pkgs {
 		if *verbose {
 			fmt.Printf("Package: %s\n", pkg.PkgPath)
@@ -441,21 +479,32 @@ func rewriteImports(upgrades []upgrade) {
 
 			// Skip this file if we've already visited it (including test
 			// packages means that some files can appear more than once)
-			if visited[filename] {
+			if filesVisited[filename] {
 				continue
 			}
-			visited[filename] = true
+			filesVisited[filename] = true
 
 			var found bool
 			for _, fileImp := range fileAST.Imports {
 				importPath := strings.Trim(fileImp.Path.Value, "\"")
 
+				// We have to actually compare module paths, not just import
+				// paths. Imagine we're upgrading dep to dep/v5, but dep/v3 is
+				// already installed. If we only looked at import paths, we'd
+				// be liable to get dep/v5/v3, which is invalid. It's difficult
+				// to tell where the module path ends and the package path
+				// begins, so we call out to "go list".
+				modulePath, ok := importPathToModule[importPath]
+				if !ok {
+					modulePath, err = getModulePath(importPath)
+					if err != nil {
+						log.Fatalf("Error getting module path for import %s: %s", importPath, err)
+					}
+					importPathToModule[importPath] = modulePath
+				}
+
 				for _, upgrade := range upgrades {
-					// TODO: This is not safe, for example if you're updating
-					// the v0/v1 version of a module to a higher version, but
-					// there is already another higher version of the same
-					// dependency (which will have the same prefix)
-					if strings.HasPrefix(importPath, upgrade.oldPath) {
+					if upgrade.oldPath == modulePath {
 						if !found {
 							found = true
 							if *verbose {
@@ -476,6 +525,7 @@ func rewriteImports(upgrades []upgrade) {
 					}
 				}
 			}
+
 			if found {
 				f, err := os.Create(filename)
 				if err != nil {
