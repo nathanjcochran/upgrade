@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"go/ast"
 	"go/printer"
+	"go/token"
 	"io/ioutil"
 	"log"
 	"os"
@@ -519,16 +521,9 @@ func rewriteImports(upgrades []upgrade) {
 
 			// If any of the file's import paths were updated, write it to disk
 			if found {
-				f, err := os.Create(filename)
-				if err != nil {
-					f.Close()
-					log.Fatalf("Error opening file %s: %s", filename, err)
+				if err := writeFileAST(filename, fileAST, pkg.Fset); err != nil {
+					log.Fatalf("Error rewriting file imports: %s", err)
 				}
-				if err := printer.Fprint(f, pkg.Fset, fileAST); err != nil {
-					f.Close()
-					log.Fatalf("Error writing to file %s: %s", filename, err)
-				}
-				f.Close()
 			}
 		}
 	}
@@ -550,4 +545,18 @@ func loadPackages() []*packages.Package {
 	}
 
 	return pkgs
+}
+
+func writeFileAST(filename string, fileAST *ast.File, fset *token.FileSet) error {
+	f, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("error opening file %s: %s", filename, err)
+	}
+	defer f.Close()
+
+	if err := printer.Fprint(f, fset, fileAST); err != nil {
+		return fmt.Errorf("error writing file %s: %s", filename, err)
+	}
+
+	return nil
 }
