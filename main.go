@@ -452,25 +452,16 @@ type upgrade struct {
 	newPath string
 }
 
-// TODO: Use a map of upgrades instead of slice
 func rewriteImports(upgrades []upgrade) {
-	cfg := &packages.Config{
-		Mode:  packages.LoadSyntax,
-		Tests: true,
-	}
-	loadPath := fmt.Sprintf("%s/...", path.Clean(*dir))
-	pkgs, err := packages.Load(cfg, loadPath)
-	if err != nil {
-		log.Fatalf("Error loading package info: %s", err)
-	}
-
-	if len(pkgs) < 1 {
-		log.Fatalf("Failed to find/load package info")
+	upgradeMap := map[string]string{}
+	for _, upgrade := range upgrades {
+		upgradeMap[upgrade.oldPath] = upgrade.newPath
 	}
 
 	var (
-		filesVisited       = map[string]bool{}
-		importPathToModule = map[string]string{} // Cache of module paths
+		pkgs           = loadPackages()
+		filesVisited   = map[string]bool{}
+		importToModule = map[string]string{} // Cache of module paths
 	)
 	for _, pkg := range pkgs {
 		if *verbose {
@@ -480,7 +471,7 @@ func rewriteImports(upgrades []upgrade) {
 			filename := pkg.CompiledGoFiles[i]
 
 			// Skip this file if we've already visited it (including test
-			// packages means that some files can appear more than once)
+			// packages means some files can appear more than once)
 			if filesVisited[filename] {
 				continue
 			}
@@ -491,43 +482,42 @@ func rewriteImports(upgrades []upgrade) {
 				importPath := strings.Trim(fileImp.Path.Value, "\"")
 
 				// We have to actually compare module paths, not just import
-				// paths. Imagine we're upgrading dep to dep/v5, but dep/v3 is
+				// paths. Imagine upgrading dep to dep/v5, but dep/v3 is
 				// already installed. If we only looked at import paths, we'd
 				// be liable to get dep/v5/v3, which is invalid. It's difficult
 				// to tell where the module path ends and the package path
-				// begins, so we call out to "go list".
-				modulePath, ok := importPathToModule[importPath]
-				if !ok {
+				// begins, so we call out to "go list" (and cache the result).
+				modulePath, exists := importToModule[importPath]
+				if !exists {
+					var err error
 					modulePath, err = getModulePath(importPath)
 					if err != nil {
 						log.Fatalf("Error getting module path for import %s: %s", importPath, err)
 					}
-					importPathToModule[importPath] = modulePath
+					importToModule[importPath] = modulePath
 				}
 
-				for _, upgrade := range upgrades {
-					if upgrade.oldPath == modulePath {
-						if !found {
-							found = true
-							if *verbose {
-								fmt.Printf("%s:\n", filename)
-							}
-						}
-
-						newImportPath := strings.Replace(importPath, upgrade.oldPath, upgrade.newPath, 1)
-						if err := module.CheckImportPath(newImportPath); err != nil {
-							log.Fatalf("Invalid import path after modification: %s", newImportPath)
-						}
-
-						fileImp.Path.Value = fmt.Sprintf("\"%s\"", newImportPath)
-
+				if newPath, ok := upgradeMap[modulePath]; ok {
+					if !found {
+						found = true
 						if *verbose {
-							fmt.Printf("\t%s -> %s\n", importPath, newImportPath)
+							fmt.Printf("%s:\n", filename)
 						}
+					}
+
+					newImportPath := strings.Replace(importPath, modulePath, newPath, 1)
+					if err := module.CheckImportPath(newImportPath); err != nil {
+						log.Fatalf("Invalid import path after upgrade: %s", newImportPath)
+					}
+					fileImp.Path.Value = fmt.Sprintf("\"%s\"", newImportPath)
+
+					if *verbose {
+						fmt.Printf("\t%s -> %s\n", importPath, newImportPath)
 					}
 				}
 			}
 
+			// If any of the file's import paths were updated, write it to disk
 			if found {
 				f, err := os.Create(filename)
 				if err != nil {
@@ -542,4 +532,22 @@ func rewriteImports(upgrades []upgrade) {
 			}
 		}
 	}
+}
+
+func loadPackages() []*packages.Package {
+	cfg := &packages.Config{
+		Mode:  packages.LoadSyntax,
+		Tests: true,
+	}
+	loadPath := fmt.Sprintf("%s/...", path.Clean(*dir))
+	pkgs, err := packages.Load(cfg, loadPath)
+	if err != nil {
+		log.Fatalf("Error loading package info: %s", err)
+	}
+
+	if len(pkgs) < 1 {
+		log.Fatalf("Failed to find/load package info")
+	}
+
+	return pkgs
 }
