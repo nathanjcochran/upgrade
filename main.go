@@ -245,6 +245,7 @@ func upgradeDependency(file *modfile.File, path, version string) {
 	}
 }
 
+// TODO: Make concurrent
 func upgradeAllDependencies(file *modfile.File) {
 	// For each requirement, check if there is a higher major version available
 	var upgrades []upgrade
@@ -341,19 +342,40 @@ func getUpgradeVersion(path string) (string, error) {
 		return "", fmt.Errorf("invalid module path: %s", path)
 	}
 
-	// If the dependency already has a major version in its import
-	// path, start there. Otherwise, start at v2 (since we're always
-	// upgrading to at least v2)
-	version := 2
+	var version int
 	if pathMajor != "" {
+		// If the dependency already has a major version in its import path,
+		// start our search for a higher version there
 		var err error
 		version, err = strconv.Atoi(strings.TrimPrefix(pathMajor, "/v"))
 		if err != nil {
 			return "", fmt.Errorf("invalid major version '%s': %s", pathMajor, err)
 		}
 		version++
+	} else {
+		// Otherwise, get the highest available minor update version (including
+		// incompatible versions, which allows us to skip over them and start
+		// at the first valid major version)
+		minorUpdateVersion, err := getMinorUpdateVersion(path)
+		if err != nil {
+			return "", fmt.Errorf("error getting minor update version for %s: %s", path, err)
+		}
+
+		major := semver.Major(minorUpdateVersion)
+		version, err = strconv.Atoi(strings.TrimPrefix(major, "v"))
+		if err != nil {
+			return "", fmt.Errorf("invalid minor update version: %s", minorUpdateVersion)
+		}
+		version++
+
+		// Make sure not to try upgrading path to /v1
+		if version < 2 {
+			version = 2
+		}
 	}
 
+	// TODO: Consider actually upgrading to higher incompatible versions.
+	// Would need to ensure that it's actually higher than the current version
 	var upgradeVersion string
 	for {
 		// Make batched calls to 'go list -m' for
@@ -390,19 +412,63 @@ func getUpgradeVersion(path string) (string, error) {
 				return "", fmt.Errorf("error parsing results of 'go list -m -e -json' command: %s", err)
 			}
 
-			// TODO: Checking the content of the error message is hacky,
-			// but it's the only way I could differentiate errors due to
-			// incompatible pre-module versions from errors due to unavailable
-			// (i.e. not yet released) versions.
 			if result.Error.Err == "" {
 				upgradeVersion = result.Version
-			} else if strings.Contains(result.Error.Err, "no matching versions for query") {
+			} else {
+				if *verbose {
+					fmt.Println(result.Error.Err)
+				}
 				return upgradeVersion, nil
-			} else if *verbose {
-				fmt.Println(result.Error.Err)
 			}
 		}
 	}
+}
+
+func getMinorUpdateVersion(path string) (string, error) {
+	cmd := exec.CommandContext(context.Background(),
+		"go", []string{"list", "-m", "-u", "-e", "-json",
+			path,
+		}...,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		if err := err.(*exec.ExitError); err != nil {
+			// TODO: Clean up these random print statements
+			fmt.Println(string(err.Stderr))
+		}
+		return "", fmt.Errorf("error executing 'go list -m -u -e -json' command: %s", err)
+	}
+
+	var result struct {
+		Version string
+		Update  struct {
+			Version string
+		}
+		Error struct {
+			Err string
+		}
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return "", fmt.Errorf("error parsing results of 'go list -m -u -e -json' command: %s", err)
+	}
+
+	if result.Error.Err != "" {
+		return "", fmt.Errorf("error getting minor update version for %s: %s", path, result.Error.Err)
+	}
+
+	if result.Update.Version == "" {
+		// Use current version if no update version is given (i.e. because
+		// we're already at highest available minor version)
+		if !semver.IsValid(result.Version) {
+			return "", fmt.Errorf("invalid version returned from 'go list -m -u -e -json' command: %s", result.Version)
+		}
+		return result.Version, nil
+	}
+
+	if !semver.IsValid(result.Update.Version) {
+		return "", fmt.Errorf("invalid update version returned from 'go list -m -u -e -json' command: %s", result.Update.Version)
+	}
+	return result.Update.Version, nil
 }
 
 func getFullVersion(path, version string) (string, error) {
