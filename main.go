@@ -349,9 +349,7 @@ func getUpgradeVersion(path string) (string, error) {
 		var err error
 		version, err = strconv.Atoi(strings.TrimPrefix(pathMajor, "/v"))
 		if err != nil {
-			return "", fmt.Errorf(
-				"invalid major version '%s': %s", pathMajor, err,
-			)
+			return "", fmt.Errorf("invalid major version '%s': %s", pathMajor, err)
 		}
 		version++
 	}
@@ -527,7 +525,7 @@ func rewriteImports(dir string, upgrades []upgrade) error {
 
 					newImportPath := strings.Replace(importPath, modulePath, newPath, 1)
 					if err := module.CheckImportPath(newImportPath); err != nil {
-						return fmt.Errorf("Invalid import path after upgrade: %s", newImportPath)
+						return fmt.Errorf("invalid import path after upgrade: %s", newImportPath)
 					}
 					fileImp.Path.Value = fmt.Sprintf("\"%s\"", newImportPath)
 
@@ -563,11 +561,11 @@ func loadPackages(dir string) ([]*packages.Package, error) {
 	loadPath := fmt.Sprintf("%s/...", path.Clean(dir))
 	pkgs, err := packages.Load(cfg, loadPath)
 	if err != nil {
-		return nil, fmt.Errorf("Error loading package info: %s", err)
+		return nil, fmt.Errorf("error loading package info: %s", err)
 	}
 
 	if len(pkgs) < 1 {
-		return nil, fmt.Errorf("Failed to find/load package info")
+		return nil, fmt.Errorf("failed to find/load package info")
 	}
 
 	return pkgs, nil
