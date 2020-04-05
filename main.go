@@ -76,7 +76,9 @@ var (
 
 func main() {
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), usage, os.Args[0])
+		if _, err := fmt.Fprintf(flag.CommandLine.Output(), usage, os.Args[0]); err != nil {
+			log.Fatalf("Error outputting usage message: %s", err)
+		}
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -460,6 +462,12 @@ type upgrade struct {
 	newPath string
 }
 
+type file struct {
+	name string
+	ast  *ast.File
+	fset *token.FileSet
+}
+
 func rewriteImports(dir string, upgrades []upgrade) error {
 	upgradeMap := map[string]string{}
 	for _, upgrade := range upgrades {
@@ -472,6 +480,7 @@ func rewriteImports(dir string, upgrades []upgrade) error {
 	}
 
 	var (
+		modified       = []file{}
 		filesVisited   = map[string]bool{}
 		importToModule = map[string]string{} // Cache of module paths
 	)
@@ -501,7 +510,6 @@ func rewriteImports(dir string, upgrades []upgrade) error {
 				// begins, so we call out to "go list" (and cache the result).
 				modulePath, exists := importToModule[importPath]
 				if !exists {
-					var err error
 					modulePath, err = getModulePath(importPath)
 					if err != nil {
 						return fmt.Errorf("error getting module path for import %s: %s", importPath, err)
@@ -531,10 +539,17 @@ func rewriteImports(dir string, upgrades []upgrade) error {
 
 			// If any of the file's import paths were updated, write it to disk
 			if found {
-				if err := writeFileAST(filename, fileAST, pkg.Fset); err != nil {
-					return fmt.Errorf("Error rewriting file imports: %s", err)
-				}
+				modified = append(modified, file{
+					name: filename,
+					ast:  fileAST,
+					fset: pkg.Fset,
+				})
 			}
+		}
+	}
+	for _, file := range modified {
+		if err := writeFile(file); err != nil {
+			return fmt.Errorf("error writing file: %s", err)
 		}
 	}
 	return nil
@@ -558,15 +573,15 @@ func loadPackages(dir string) ([]*packages.Package, error) {
 	return pkgs, nil
 }
 
-func writeFileAST(filename string, fileAST *ast.File, fset *token.FileSet) error {
-	f, err := os.Create(filename)
+func writeFile(file file) error {
+	f, err := os.Create(file.name)
 	if err != nil {
-		return fmt.Errorf("error opening file %s: %s", filename, err)
+		return fmt.Errorf("error opening file %s: %s", file.name, err)
 	}
 	defer f.Close()
 
-	if err := printer.Fprint(f, fset, fileAST); err != nil {
-		return fmt.Errorf("error writing file %s: %s", filename, err)
+	if err := printer.Fprint(f, file.fset, file.ast); err != nil {
+		return fmt.Errorf("error writing file %s: %s", file.name, err)
 	}
 
 	return nil
