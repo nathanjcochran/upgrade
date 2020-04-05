@@ -545,6 +545,9 @@ func rewriteImports(dir string, upgrades []upgrade) error {
 			}
 		}
 	}
+
+	// Write modified files at the end, to avoid issues with "go list"
+	// during the process (in case the upgrade breaks the build)
 	for _, file := range modified {
 		if err := writeFile(file); err != nil {
 			return fmt.Errorf("error writing file: %s", err)
