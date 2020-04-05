@@ -156,7 +156,9 @@ func upgradeModule(file *modfile.File, version string) {
 	}
 
 	// Rewrite import paths in files
-	rewriteImports([]upgrade{{oldPath: path, newPath: newPath}})
+	if err := rewriteImports(*dir, []upgrade{{oldPath: path, newPath: newPath}}); err != nil {
+		log.Fatalf("Error rewriting imports: %s", err)
+	}
 }
 
 func upgradeDependency(file *modfile.File, path, version string) {
@@ -236,7 +238,9 @@ func upgradeDependency(file *modfile.File, path, version string) {
 	}
 
 	// Rewrite import paths in files
-	rewriteImports([]upgrade{{oldPath: path, newPath: newPath}})
+	if err := rewriteImports(*dir, []upgrade{{oldPath: path, newPath: newPath}}); err != nil {
+		log.Fatalf("Error rewriting imports: %s", err)
+	}
 }
 
 func upgradeAllDependencies(file *modfile.File) {
@@ -288,7 +292,9 @@ func upgradeAllDependencies(file *modfile.File) {
 		}
 	}
 
-	rewriteImports(upgrades)
+	if err := rewriteImports(*dir, upgrades); err != nil {
+		log.Fatalf("Error rewriting imports: %s", err)
+	}
 }
 
 func upgradePath(path, version string) (string, error) {
@@ -424,7 +430,7 @@ func getModulePath(importPath string) (string, error) {
 		if err := err.(*exec.ExitError); err != nil {
 			fmt.Println(string(err.Stderr))
 		}
-		return "", fmt.Errorf("error executing 'go list -f {{.Module.Path}}' command: %s", err)
+		return "", fmt.Errorf("error executing 'go list -json' command: %s", err)
 	}
 
 	var result struct {
@@ -443,7 +449,7 @@ func getModulePath(importPath string) (string, error) {
 	}
 
 	if result.Module.Path == "" {
-		return "", fmt.Errorf("error getting module path for import: %s", importPath)
+		return "", fmt.Errorf("no module path returned from 'go list -json' command")
 	}
 
 	return result.Module.Path, nil
@@ -454,14 +460,18 @@ type upgrade struct {
 	newPath string
 }
 
-func rewriteImports(upgrades []upgrade) {
+func rewriteImports(dir string, upgrades []upgrade) error {
 	upgradeMap := map[string]string{}
 	for _, upgrade := range upgrades {
 		upgradeMap[upgrade.oldPath] = upgrade.newPath
 	}
 
+	pkgs, err := loadPackages(dir)
+	if err != nil {
+		return fmt.Errorf("error loading packages: %s", err)
+	}
+
 	var (
-		pkgs           = loadPackages()
 		filesVisited   = map[string]bool{}
 		importToModule = map[string]string{} // Cache of module paths
 	)
@@ -494,7 +504,7 @@ func rewriteImports(upgrades []upgrade) {
 					var err error
 					modulePath, err = getModulePath(importPath)
 					if err != nil {
-						log.Fatalf("Error getting module path for import %s: %s", importPath, err)
+						return fmt.Errorf("error getting module path for import %s: %s", importPath, err)
 					}
 					importToModule[importPath] = modulePath
 				}
@@ -509,7 +519,7 @@ func rewriteImports(upgrades []upgrade) {
 
 					newImportPath := strings.Replace(importPath, modulePath, newPath, 1)
 					if err := module.CheckImportPath(newImportPath); err != nil {
-						log.Fatalf("Invalid import path after upgrade: %s", newImportPath)
+						return fmt.Errorf("Invalid import path after upgrade: %s", newImportPath)
 					}
 					fileImp.Path.Value = fmt.Sprintf("\"%s\"", newImportPath)
 
@@ -522,29 +532,30 @@ func rewriteImports(upgrades []upgrade) {
 			// If any of the file's import paths were updated, write it to disk
 			if found {
 				if err := writeFileAST(filename, fileAST, pkg.Fset); err != nil {
-					log.Fatalf("Error rewriting file imports: %s", err)
+					return fmt.Errorf("Error rewriting file imports: %s", err)
 				}
 			}
 		}
 	}
+	return nil
 }
 
-func loadPackages() []*packages.Package {
+func loadPackages(dir string) ([]*packages.Package, error) {
 	cfg := &packages.Config{
 		Mode:  packages.LoadSyntax,
 		Tests: true,
 	}
-	loadPath := fmt.Sprintf("%s/...", path.Clean(*dir))
+	loadPath := fmt.Sprintf("%s/...", path.Clean(dir))
 	pkgs, err := packages.Load(cfg, loadPath)
 	if err != nil {
-		log.Fatalf("Error loading package info: %s", err)
+		return nil, fmt.Errorf("Error loading package info: %s", err)
 	}
 
 	if len(pkgs) < 1 {
-		log.Fatalf("Failed to find/load package info")
+		return nil, fmt.Errorf("Failed to find/load package info")
 	}
 
-	return pkgs
+	return pkgs, nil
 }
 
 func writeFileAST(filename string, fileAST *ast.File, fset *token.FileSet) error {
