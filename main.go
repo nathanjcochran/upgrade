@@ -170,47 +170,49 @@ func upgradeDependency(file *modfile.File, path, version string) {
 		log.Fatalf("Invalid module path %s: %s", path, err)
 	}
 
+	var (
+		newPath     string
+		fullVersion string
+	)
 	switch version {
 	case "":
 		// If no target major version was given, call 'go list -m'
 		// to find the highest available major version
 		var err error
-		version, err = getUpgradeVersion(path)
+		fullVersion, err = getUpgradeVersion(path)
 		if err != nil {
 			log.Fatalf("Error finding upgrade version: %s", err)
 		}
-		if version == "" {
+		if fullVersion == "" {
 			log.Fatalf("No versions available for upgrade")
 		}
+
+		// Figure out what the post-upgrade module path should be
+		newPath, err = upgradePath(path, fullVersion)
+		if err != nil {
+			log.Fatalf("Error upgrading module path %s to %s: %s", path, fullVersion, err)
+		}
 	default:
+		// If a target version was given, make sure it's valid, then call
+		// 'go list -m' to get the full version and path (which depends on
+		// whether the version is incompatible or not)
 		if !semver.IsValid(version) {
 			log.Fatalf("Invalid upgrade version: %s", version)
 		}
-	}
 
-	// Figure out what the post-upgrade module path should be
-	newPath, err := upgradePath(path, version)
-	if err != nil {
-		log.Fatalf("Error upgrading module path %s to %s: %s", path, version, err)
-	}
-
-	// Get the full version for the upgraded dependency
-	// (with the highest available minor/patch version)
-	if module.CanonicalVersion(version) != version {
-		// TODO: Consider case where version given is incompatible,
-		// and the path should not actually include the major version.
-		// Should we handle that kind of upgrade?
-		version, err = getFullVersion(newPath, version)
+		var err error
+		newPath, fullVersion, err = getUpgradePathAndFullVersion(path, version)
 		if err != nil {
-			log.Fatalf("Error getting full upgrade version: %s", err)
+			log.Fatalf("Error getting upgrade path and version: %s", err)
 		}
 	}
 
 	// Make sure the given module is actually a dependency in the go.mod file
 	var (
-		found       = false
-		oldVersion  = ""
-		majorExists = false
+		found             = false
+		oldVersion        = ""
+		alreadyExists     = false
+		removePreexisting = false
 	)
 	for _, require := range file.Require {
 		switch require.Mod.Path {
@@ -218,8 +220,15 @@ func upgradeDependency(file *modfile.File, path, version string) {
 			found = true
 			oldVersion = require.Mod.Version
 		case newPath:
-			majorExists = true
-			version = require.Mod.Version
+			if strings.HasPrefix(require.Mod.Version, version) {
+				// Only keep existing version if it matches
+				// the provided version (and/or is more specific)
+				alreadyExists = true
+				fullVersion = require.Mod.Version
+			} else {
+				// Otherwise, remove and replace the pre-existing dependency
+				removePreexisting = true
+			}
 		}
 	}
 
@@ -227,23 +236,33 @@ func upgradeDependency(file *modfile.File, path, version string) {
 		log.Fatalf("Module not a known dependency: %s", path)
 	}
 
-	fmt.Printf("%s %s -> %s %s\n", path, oldVersion, newPath, version)
+	fmt.Printf("%s %s -> %s %s\n", path, oldVersion, newPath, fullVersion)
 
 	// Drop the old module dependency and add the new, upgraded one (unless the
 	// new major version of the dependency already existed as a dependency, in
-	// which case, we maintain that)
+	// which case, we drop it if didn't match the provided version, or maintain
+	// it if it did)
 	if err := file.DropRequire(path); err != nil {
 		log.Fatalf("Error dropping module requirement %s: %s", path, err)
 	}
-	if !majorExists {
-		if err := file.AddRequire(newPath, version); err != nil {
+	if removePreexisting {
+		if err := file.DropRequire(newPath); err != nil {
+			log.Fatalf("Error dropping module requirement %s: %s", newPath, err)
+		}
+	}
+	if !alreadyExists {
+		if err := file.AddRequire(newPath, fullVersion); err != nil {
 			log.Fatalf("Error adding module requirement %s: %s", newPath, err)
 		}
 	}
 
-	// Rewrite import paths in files
-	if err := rewriteImports(*dir, []upgrade{{oldPath: path, newPath: newPath}}); err != nil {
-		log.Fatalf("Error rewriting imports: %s", err)
+	// If new path differs from old, rewrite import paths (paths can be the
+	// same in case of minor version update)
+	if newPath != path {
+		// Rewrite import paths in files
+		if err := rewriteImports(*dir, []upgrade{{oldPath: path, newPath: newPath}}); err != nil {
+			log.Fatalf("Error rewriting imports: %s", err)
+		}
 	}
 }
 
@@ -473,20 +492,74 @@ func getMinorUpdateVersion(path string) (string, error) {
 	return result.Update.Version, nil
 }
 
-func getFullVersion(path, version string) (string, error) {
-	cmd := exec.CommandContext(context.Background(),
-		"go", "list", "-m", "-f", "{{.Version}}",
-		fmt.Sprintf("%s@%s", path, version),
-	)
-	fullVersion, err := cmd.Output()
+func getUpgradePathAndFullVersion(path, version string) (string, string, error) {
+	newPath, err := upgradePath(path, version)
 	if err != nil {
-		if err := err.(*exec.ExitError); err != nil {
-			fmt.Println(string(err.Stderr))
-		}
-		return "", fmt.Errorf("error executing 'go list -m -f {{.Version}}' command: %s", err)
+		return "", "", fmt.Errorf("error upgrading module path %s to %s: %s", path, version, err)
 	}
 
-	return strings.TrimSpace(string(fullVersion)), nil
+	cmd := exec.CommandContext(context.Background(),
+		"go", "list", "-m", "-e", "-json",
+		fmt.Sprintf("%s@%s", newPath, version),
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		if err := err.(*exec.ExitError); err != nil {
+			// TODO: Clean up random print statements
+			fmt.Println(string(err.Stderr))
+		}
+		return "", "", fmt.Errorf("error executing 'go list -m -e -json' command: %s", err)
+	}
+
+	var result struct {
+		Version string
+		Error   struct {
+			Err string
+		}
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return "", "", fmt.Errorf("error parsing results of 'go list -m -e -json' command: %s", err)
+	}
+
+	if result.Error.Err == "" {
+		return newPath, result.Version, nil
+	}
+
+	// If the query did not return a result, make another query to check for an
+	// incompatible version
+	prefix, _, ok := module.SplitPathVersion(path)
+	if !ok {
+		return "", "", fmt.Errorf("invalid module path: %s", path)
+	}
+
+	cmd = exec.CommandContext(context.Background(),
+		"go", "list", "-m", "-e", "-json",
+		fmt.Sprintf("%s@%s", prefix, version),
+	)
+	out, err = cmd.Output()
+	if err != nil {
+		if err := err.(*exec.ExitError); err != nil {
+			// TODO: Clean up random print statements
+			fmt.Println(string(err.Stderr))
+		}
+		return "", "", fmt.Errorf("error executing 'go list -m -e -json' command: %s", err)
+	}
+
+	var result2 struct {
+		Version string
+		Error   struct {
+			Err string
+		}
+	}
+	if err := json.Unmarshal(out, &result2); err != nil {
+		return "", "", fmt.Errorf("error parsing results of 'go list -m -e -json' command: %s", err)
+	}
+
+	if result2.Error.Err != "" {
+		return "", "", fmt.Errorf("error getting upgrade path and version for %s: %s", path, result2.Error.Err)
+	}
+
+	return prefix, result2.Version, nil
 }
 
 func getModulePath(importPath string) (string, error) {
