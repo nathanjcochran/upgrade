@@ -556,7 +556,9 @@ func getUpgradePathAndFullVersion(path, version string) (string, string, error) 
 	}
 
 	if result2.Error.Err != "" {
-		return "", "", fmt.Errorf("error getting upgrade path and version for %s: %s", path, result2.Error.Err)
+		// Use first result's error here, as it's more canonical to have the
+		// major version in the import path
+		return "", "", fmt.Errorf("error getting version information: %s", result.Error.Err)
 	}
 
 	return prefix, result2.Version, nil
