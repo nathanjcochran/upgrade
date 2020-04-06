@@ -144,6 +144,7 @@ func upgradeModule(file *modfile.File, version string) {
 	}
 
 	// Figure out what the post-upgrade module path should be
+	// (if version is empty, simply increment the version number)
 	newPath, err := upgradePath(path, version)
 	if err != nil {
 		log.Fatalf("Error upgrading module path %s to %s: %s",
@@ -190,14 +191,15 @@ func upgradeDependency(file *modfile.File, path, version string) {
 	// Figure out what the post-upgrade module path should be
 	newPath, err := upgradePath(path, version)
 	if err != nil {
-		log.Fatalf("Error upgrading module path %s to %s: %s",
-			path, version, err,
-		)
+		log.Fatalf("Error upgrading module path %s to %s: %s", path, version, err)
 	}
 
 	// Get the full version for the upgraded dependency
 	// (with the highest available minor/patch version)
 	if module.CanonicalVersion(version) != version {
+		// TODO: Consider case where version given is incompatible,
+		// and the path should not actually include the major version.
+		// Should we handle that kind of upgrade?
 		version, err = getFullVersion(newPath, version)
 		if err != nil {
 			log.Fatalf("Error getting full upgrade version: %s", err)
@@ -307,7 +309,7 @@ func upgradePath(path, version string) (string, error) {
 	}
 
 	if version == "" {
-		// Upgrade to next sequential version
+		// If no version was specified, upgrade to next sequential version
 		if pathMajor == "" {
 			version = "v2"
 		} else {
@@ -433,7 +435,7 @@ func getMinorUpdateVersion(path string) (string, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		if err := err.(*exec.ExitError); err != nil {
-			// TODO: Clean up these random print statements
+			// TODO: Clean up random print statements
 			fmt.Println(string(err.Stderr))
 		}
 		return "", fmt.Errorf("error executing 'go list -m -u -e -json' command: %s", err)
