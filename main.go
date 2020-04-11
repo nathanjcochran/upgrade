@@ -1,18 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"go/ast"
-	"go/printer"
-	"go/token"
 	"io/ioutil"
 	"log"
 	"os"
-	"os/exec"
 	"path"
 	"strconv"
 	"strings"
@@ -20,7 +14,6 @@ import (
 	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/module"
 	"golang.org/x/mod/semver"
-	"golang.org/x/tools/go/packages"
 )
 
 const usage = `Usage: %s [-d dir] [-v] [module] [version]
@@ -201,7 +194,7 @@ func upgradeDependency(file *modfile.File, path, version string) {
 		}
 
 		var err error
-		newPath, fullVersion, err = getUpgradePathAndFullVersion(path, version)
+		newPath, fullVersion, err = upgradePathToVersion(path, version)
 		if err != nil {
 			log.Fatalf("Error getting upgrade path and version: %s", err)
 		}
@@ -366,7 +359,7 @@ func getUpgradeVersion(path string) (string, error) {
 	var version int
 	if pathMajor != "" {
 		// If the dependency already has a major version in its import path,
-		// start our search for a higher version there
+		// start our search for a higher major version there
 		var err error
 		version, err = strconv.Atoi(strings.TrimPrefix(pathMajor, "/v"))
 		if err != nil {
@@ -374,9 +367,10 @@ func getUpgradeVersion(path string) (string, error) {
 		}
 		version++
 	} else {
-		// Otherwise, get the highest available minor update version (including
-		// incompatible versions, which allows us to skip over them and start
-		// at the first valid major version)
+		// If the dependency does not have a major version in its import path,
+		// get the highest available minor update version (including
+		// incompatible major versions, which allows us to skip over them and
+		// start at the first module-aware major version)
 		minorUpdateVersion, err := getMinorUpdateVersion(path)
 		if err != nil {
 			return "", fmt.Errorf("error getting minor update version for %s: %s", path, err)
@@ -387,12 +381,13 @@ func getUpgradeVersion(path string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("invalid minor update version: %s", minorUpdateVersion)
 		}
-		version++
 
 		// Make sure not to try upgrading path to /v1
-		if version < 2 {
-			version = 2
+		// (i.e. if the highest minor update version is v0.x.x)
+		if version < 1 {
+			version = 1
 		}
+		version++
 	}
 
 	// TODO: Consider actually upgrading to higher incompatible versions.
@@ -408,325 +403,73 @@ func getUpgradeVersion(path string) (string, error) {
 			version++
 		}
 
-		cmd := exec.CommandContext(context.Background(),
-			"go", append([]string{"list", "-m", "-e", "-json"},
-				batch...,
-			)...,
-		)
-		out, err := cmd.Output()
+		results, err := listModules(context.Background(), batch...)
 		if err != nil {
-			if err := err.(*exec.ExitError); err != nil {
-				fmt.Println(string(err.Stderr))
-			}
-			return "", fmt.Errorf("error executing 'go list -m -e -json' command: %s", err)
+			return "", fmt.Errorf("error getting module info: %s", err)
 		}
 
-		decoder := json.NewDecoder(bytes.NewReader(out))
-		for decoder.More() {
-			var result struct {
-				Version string
-				Error   struct {
-					Err string
-				}
-			}
-			if err := decoder.Decode(&result); err != nil {
-				return "", fmt.Errorf("error parsing results of 'go list -m -e -json' command: %s", err)
-			}
-
-			if result.Error.Err == "" {
-				upgradeVersion = result.Version
-			} else {
+		for _, result := range results {
+			if result.Error != nil {
 				if *verbose {
 					fmt.Println(result.Error.Err)
 				}
 				return upgradeVersion, nil
 			}
+			upgradeVersion = result.Version
 		}
 	}
 }
 
 func getMinorUpdateVersion(path string) (string, error) {
-	cmd := exec.CommandContext(context.Background(),
-		"go", []string{"list", "-m", "-u", "-e", "-json",
-			path,
-		}...,
-	)
-	out, err := cmd.Output()
+	results, err := listModules(context.Background(), path)
 	if err != nil {
-		if err := err.(*exec.ExitError); err != nil {
-			// TODO: Clean up random print statements
-			fmt.Println(string(err.Stderr))
-		}
-		return "", fmt.Errorf("error executing 'go list -m -u -e -json' command: %s", err)
+		return "", fmt.Errorf("error getting module info: %s", err)
+	}
+	result := results[0]
+
+	if result.Error != nil {
+		return "", fmt.Errorf("error getting module info: %s", path, result.Error.Err)
 	}
 
-	var result struct {
-		Version string
-		Update  struct {
-			Version string
+	if result.Update != nil {
+		if !semver.IsValid(result.Update.Version) {
+			return "", fmt.Errorf("invalid minor update version returned in module info: %s", result.Update.Version)
 		}
-		Error struct {
-			Err string
-		}
-	}
-	if err := json.Unmarshal(out, &result); err != nil {
-		return "", fmt.Errorf("error parsing results of 'go list -m -u -e -json' command: %s", err)
+		return result.Update.Version, nil
 	}
 
-	if result.Error.Err != "" {
-		return "", fmt.Errorf("error getting minor update version for %s: %s", path, result.Error.Err)
+	// Use current version if no update version is given
+	// (i.e. we're already at the highest available minor version)
+	if !semver.IsValid(result.Version) {
+		return "", fmt.Errorf("invalid version returned in module info: %s", result.Version)
 	}
-
-	if result.Update.Version == "" {
-		// Use current version if no update version is given (i.e. because
-		// we're already at highest available minor version)
-		if !semver.IsValid(result.Version) {
-			return "", fmt.Errorf("invalid version returned from 'go list -m -u -e -json' command: %s", result.Version)
-		}
-		return result.Version, nil
-	}
-
-	if !semver.IsValid(result.Update.Version) {
-		return "", fmt.Errorf("invalid update version returned from 'go list -m -u -e -json' command: %s", result.Update.Version)
-	}
-	return result.Update.Version, nil
+	return result.Version, nil
 }
 
-func getUpgradePathAndFullVersion(path, version string) (string, string, error) {
-	newPath, err := upgradePath(path, version)
-	if err != nil {
-		return "", "", fmt.Errorf("error upgrading module path %s to %s: %s", path, version, err)
-	}
-
-	cmd := exec.CommandContext(context.Background(),
-		"go", "list", "-m", "-e", "-json",
-		fmt.Sprintf("%s@%s", newPath, version),
-	)
-	out, err := cmd.Output()
-	if err != nil {
-		if err := err.(*exec.ExitError); err != nil {
-			// TODO: Clean up random print statements
-			fmt.Println(string(err.Stderr))
-		}
-		return "", "", fmt.Errorf("error executing 'go list -m -e -json' command: %s", err)
-	}
-
-	var result struct {
-		Version string
-		Error   struct {
-			Err string
-		}
-	}
-	if err := json.Unmarshal(out, &result); err != nil {
-		return "", "", fmt.Errorf("error parsing results of 'go list -m -e -json' command: %s", err)
-	}
-
-	if result.Error.Err == "" {
-		return newPath, result.Version, nil
-	}
-
-	// If the query did not return a result, make another query to check for an
-	// incompatible version
+func upgradePathToVersion(path, version string) (string, string, error) {
 	prefix, _, ok := module.SplitPathVersion(path)
 	if !ok {
 		return "", "", fmt.Errorf("invalid module path: %s", path)
 	}
 
-	cmd = exec.CommandContext(context.Background(),
-		"go", "list", "-m", "-e", "-json",
-		fmt.Sprintf("%s@%s", prefix, version),
+	newPath, err := upgradePath(path, version)
+	if err != nil {
+		return "", "", fmt.Errorf("error upgrading module path %s to %s: %s", path, version, err)
+	}
+
+	results, err := listModules(context.Background(),
+		fmt.Sprintf("%s@%s", newPath, version), // Module-aware
+		fmt.Sprintf("%s@%s", prefix, version),  // Incompatible
 	)
-	out, err = cmd.Output()
 	if err != nil {
-		if err := err.(*exec.ExitError); err != nil {
-			// TODO: Clean up random print statements
-			fmt.Println(string(err.Stderr))
-		}
-		return "", "", fmt.Errorf("error executing 'go list -m -e -json' command: %s", err)
+		return "", "", fmt.Errorf("error getting module info: %s", err)
 	}
 
-	var result2 struct {
-		Version string
-		Error   struct {
-			Err string
-		}
-	}
-	if err := json.Unmarshal(out, &result2); err != nil {
-		return "", "", fmt.Errorf("error parsing results of 'go list -m -e -json' command: %s", err)
-	}
-
-	if result2.Error.Err != "" {
-		// Use first result's error here, as it's more canonical to have the
-		// major version in the import path
-		return "", "", fmt.Errorf("error getting version information: %s", result.Error.Err)
-	}
-
-	return prefix, result2.Version, nil
-}
-
-func getModulePath(importPath string) (string, error) {
-	cmd := exec.CommandContext(context.Background(),
-		"go", "list", "-json", importPath,
-	)
-	out, err := cmd.Output()
-	if err != nil {
-		if err := err.(*exec.ExitError); err != nil {
-			fmt.Println(string(err.Stderr))
-		}
-		return "", fmt.Errorf("error executing 'go list -json' command: %s", err)
-	}
-
-	var result struct {
-		Module struct {
-			Path string
-		}
-		Standard bool
-	}
-	if err := json.Unmarshal(out, &result); err != nil {
-		return "", fmt.Errorf("error parsing results of 'go list -json' command: %s", err)
-	}
-
-	// Standard library packages don't have a module
-	if result.Standard {
-		return importPath, nil
-	}
-
-	if result.Module.Path == "" {
-		return "", fmt.Errorf("no module path returned from 'go list -json' command")
-	}
-
-	return result.Module.Path, nil
-}
-
-type upgrade struct {
-	oldPath string
-	newPath string
-}
-
-type file struct {
-	name string
-	ast  *ast.File
-	fset *token.FileSet
-}
-
-func rewriteImports(dir string, upgrades []upgrade) error {
-	upgradeMap := map[string]string{}
-	for _, upgrade := range upgrades {
-		upgradeMap[upgrade.oldPath] = upgrade.newPath
-	}
-
-	pkgs, err := loadPackages(dir)
-	if err != nil {
-		return fmt.Errorf("error loading packages: %s", err)
-	}
-
-	var (
-		modified       = []file{}
-		filesVisited   = map[string]bool{}
-		importToModule = map[string]string{} // Cache of module paths
-	)
-	for _, pkg := range pkgs {
-		if *verbose {
-			fmt.Printf("Package: %s\n", pkg.PkgPath)
-		}
-		for i, fileAST := range pkg.Syntax {
-			filename := pkg.CompiledGoFiles[i]
-
-			// Skip this file if we've already visited it (including test
-			// packages means some files can appear more than once)
-			if filesVisited[filename] {
-				continue
-			}
-			filesVisited[filename] = true
-
-			var found bool
-			for _, fileImp := range fileAST.Imports {
-				importPath := strings.Trim(fileImp.Path.Value, "\"")
-
-				// We have to actually compare module paths, not just import
-				// paths. Imagine upgrading dep to dep/v5, but dep/v3 is
-				// already installed. If we only looked at import paths, we'd
-				// be liable to get dep/v5/v3, which is invalid. It's difficult
-				// to tell where the module path ends and the package path
-				// begins, so we call out to "go list" (and cache the result).
-				modulePath, exists := importToModule[importPath]
-				if !exists {
-					modulePath, err = getModulePath(importPath)
-					if err != nil {
-						return fmt.Errorf("error getting module path for import %s: %s", importPath, err)
-					}
-					importToModule[importPath] = modulePath
-				}
-
-				if newPath, ok := upgradeMap[modulePath]; ok {
-					if !found {
-						found = true
-						if *verbose {
-							fmt.Printf("%s:\n", filename)
-						}
-					}
-
-					newImportPath := strings.Replace(importPath, modulePath, newPath, 1)
-					if err := module.CheckImportPath(newImportPath); err != nil {
-						return fmt.Errorf("invalid import path after upgrade: %s", newImportPath)
-					}
-					fileImp.Path.Value = fmt.Sprintf("\"%s\"", newImportPath)
-
-					if *verbose {
-						fmt.Printf("\t%s -> %s\n", importPath, newImportPath)
-					}
-				}
-			}
-
-			// If any of the file's import paths were updated, write it to disk
-			if found {
-				modified = append(modified, file{
-					name: filename,
-					ast:  fileAST,
-					fset: pkg.Fset,
-				})
-			}
+	for _, result := range results {
+		if result.Error == nil {
+			return result.Path, result.Version, nil
 		}
 	}
 
-	// Write modified files at the end, to avoid issues with "go list"
-	// during the process (in case the upgrade breaks the build)
-	for _, file := range modified {
-		if err := writeFile(file); err != nil {
-			return fmt.Errorf("error writing file: %s", err)
-		}
-	}
-	return nil
-}
-
-func loadPackages(dir string) ([]*packages.Package, error) {
-	cfg := &packages.Config{
-		Mode:  packages.LoadSyntax,
-		Tests: true,
-	}
-	loadPath := fmt.Sprintf("%s/...", path.Clean(dir))
-	pkgs, err := packages.Load(cfg, loadPath)
-	if err != nil {
-		return nil, fmt.Errorf("error loading package info: %s", err)
-	}
-
-	if len(pkgs) < 1 {
-		return nil, fmt.Errorf("failed to find/load package info")
-	}
-
-	return pkgs, nil
-}
-
-func writeFile(file file) error {
-	f, err := os.Create(file.name)
-	if err != nil {
-		return fmt.Errorf("error opening file %s: %s", file.name, err)
-	}
-	defer f.Close()
-
-	if err := printer.Fprint(f, file.fset, file.ast); err != nil {
-		return fmt.Errorf("error writing file %s: %s", file.name, err)
-	}
-
-	return nil
+	return "", "", fmt.Errorf("error getting version information: %s", results[0].Error.Err)
 }
