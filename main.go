@@ -261,9 +261,17 @@ func upgradeDependency(file *modfile.File, path, version string) {
 
 // TODO: Make concurrent
 func upgradeAllDependencies(file *modfile.File) {
+	required := map[string]string{}
+	for _, require := range file.Require {
+		required[require.Mod.Path] = require.Mod.Version
+	}
+
 	// For each requirement, check if there is a higher major version available
 	var upgrades []upgrade
 	for _, require := range file.Require {
+
+		// Don't upgrade indirect dependencies (don't have access
+		// to the source code, so can't modify import paths)
 		if require.Indirect {
 			continue
 		}
@@ -289,6 +297,13 @@ func upgradeAllDependencies(file *modfile.File) {
 			)
 		}
 
+		existingVersion, exists := required[newPath]
+		if exists {
+			// If the upgraded version already exists as a dependency, maintain
+			// the current minor/patch version
+			version = existingVersion
+		}
+
 		upgrades = append(upgrades, upgrade{
 			oldPath: require.Mod.Path,
 			newPath: newPath,
@@ -297,15 +312,19 @@ func upgradeAllDependencies(file *modfile.File) {
 		fmt.Printf("%s %s -> %s %s\n", require.Mod.Path, require.Mod.Version, newPath, version)
 
 		// Drop the old module dependency and add the new, upgraded one
-		// TODO: Don't add the new one if the same major version already
-		// exists as a dependency
+		// NOTE: require.Mod becomes invalid after this operation
 		if err := file.DropRequire(require.Mod.Path); err != nil {
 			log.Fatalf("Error dropping module requirement %s: %s",
 				require.Mod.Path, err,
 			)
 		}
-		if err := file.AddRequire(newPath, version); err != nil {
-			log.Fatalf("Error adding module requirement %s: %s", newPath, err)
+
+		// Add the upgraded version if it doesn't already exist as a dependency
+		if !exists {
+			if err := file.AddRequire(newPath, version); err != nil {
+				log.Fatalf("Error adding module requirement %s: %s", newPath, err)
+			}
+			required[newPath] = version
 		}
 	}
 
@@ -390,8 +409,11 @@ func getUpgradeVersion(path string) (string, error) {
 		version++
 	}
 
-	// TODO: Consider actually upgrading to higher incompatible versions.
-	// Would need to ensure that it's actually higher than the current version
+	// TODO: Consider actually upgrading to higher incompatible versions?  Not
+	// sure, because that could also be done with go get -u. It just seems
+	// strange if I'm on, say, v1.0.0+incompatible and it wouldnt upgrade me
+	// to, for example, v2.0.0+incompatible. Would need to ensure it's actually
+	// a higher major than the current version
 	var upgradeVersion string
 	for {
 		// Make batched calls to 'go list -m' for
