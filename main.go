@@ -325,7 +325,7 @@ func upgradePath(path, version string) (string, error) {
 		if pathMajor == "" {
 			version = "v2"
 		} else {
-			num, err := strconv.Atoi(strings.TrimPrefix(pathMajor, "v"))
+			num, err := strconv.Atoi(strings.TrimPrefix(pathMajor, "/v"))
 			if err != nil {
 				return "", fmt.Errorf("invalid major version in module path: %s", pathMajor)
 			}
