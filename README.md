@@ -3,6 +3,9 @@
 Tool for upgrading a go module's major version, or the major version of one of
 its dependencies.
 
+This tool's only external dependency is the `go list` command (it does not
+directly call out to any version control systems).
+
 ## Usage
 
 ```
@@ -53,3 +56,121 @@ By default, the tool assumes the module being updated is rooted in the current
 directory. The [-d directory] flag can be provided to override that behavior.
 
 The [-v] flag turns on verbose output.
+
+### Upgrading the Current Module
+
+#### Incrementing the Major Version
+
+To upgrade the major version of the module in the current working directly to
+the next logical major version, simply run the `upgrade` without any arguments.
+
+For example, to upgrade `github.com/nathanjcochran/upgrade/v2` to major
+version `v3` (the next logical major version), run:
+
+```
+upgrade
+```
+
+This is equivalent to, and is basically shorthand for, providing the module's
+own module path for the [module] argument:
+
+```
+upgrade github.com/nathanjcochran/upgrade/v2
+```
+
+Note that this would also work if the module didn't yet have the major version
+component in its important path, in which case it would upgrade the module to
+major version `v2` (for example, `github.com/nathanjcochran/upgrade` to
+`github.com/nathanjcochran/upgrade/v2`).
+
+#### Changing the Major Version
+
+To change the major version of the module in the current working directory to a
+specific major version (for example, to skip immediately to a higher major
+version), give the module's own path for the [module] argument and the target
+version for the [version] argument:
+
+For example, to change the major version of `github.com/nathanjcochran/upgrade`
+to major version `v3` (skipping over `v2`), run:
+
+```
+upgrade github.com/nathanjcochran/upgrade v3
+```
+
+#### Downgrading the Major Version
+
+Downgrading the major version of a module is the same as upgrading to a specific
+major version. For example, to downgrade `github.com/nathanjcochran/upgrade/v3`
+to major version `v2`, run:
+
+```
+upgrade github.com/nathanjcochran/upgrade/v3 v2
+```
+
+### Upgrading Dependencies
+
+#### All Dependencies
+
+To upgrade all direct dependencies to the highest available major version, give
+the special "all" target for the [module] argument:
+
+```
+upgrade all
+```
+
+Note that this command can take awhile. This slowness is almost entirely due to
+external calls made to `go list` to find the highest available major version for
+each dependency.
+
+#### Highest Available Major Version
+
+To upgrade the major version of a dependency to the highest available major
+version, provide the module path of the dependency for the [module] argument.
+For example, to upgrade `github.com/some/dependency/v2`to the highest available
+major version, run:
+
+```
+upgrade github.com/some/dependency/v2
+```
+
+#### Specific Dependency Version
+
+To upgrade a dependency to a specific target version, rather than the highest
+available major version, provide the [version] argument. For example, to upgrade
+the `github.com/some/dependency/v2` dependency to `v4` (even if, for example,
+`v5` was available), run:
+
+```
+upgrade github.com/some/dependency/v2 v4
+```
+
+This will upgrade `github.com/some/dependency` to the highest available
+minor/patch version available for major version `v4` (i.e. the highest version in
+the range `v4.x.x`).
+
+You can also give a more specific target version, so long as it is a valid
+semver version number. For example, to upgrade
+`github.com/nathanjcochran/upgrade/v2` to the highest available patch version
+for minor version `v4.2` (i.e. the highest version in the range `v4.2.x`, even
+if, for example, `v4.3` was available), run:
+
+```
+upgrade github.com/nathanjcochran/upgrade/v2 v4.2
+```
+
+To update to a specific patch version, for example `v.4.2.9`, run:
+
+```
+upgrade github.com/nathanjcochran/upgrade/v2 v4.2.9
+```
+
+#### Downgrading a Dependency
+
+Downgrading the major version of a dependency is the same as upgrading it to a
+specific major version. For example, to downgrade
+`github.com/some/dependency/v3` to the highest available patch version in the
+range `v2.5.x`, run:
+
+```
+upgrade github.com/some/dependency/v3 v2.5
+```
