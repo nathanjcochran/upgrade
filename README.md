@@ -6,6 +6,26 @@ its dependencies.
 This tool's only external dependency is the `go list` command (it does not
 directly call out to any version control systems).
 
+<!-- doctoc README.md --github --title '## Table of Contents' -->
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+## Table of Contents
+
+- [Usage](#usage)
+- [Examples](#examples)
+  - [Upgrading the Current Module](#upgrading-the-current-module)
+    - [Incrementing the Major Version](#incrementing-the-major-version)
+    - [Changing to a Specific Major Version](#changing-to-a-specific-major-version)
+    - [Downgrading the Major Version](#downgrading-the-major-version)
+  - [Upgrading Dependencies](#upgrading-dependencies)
+    - [All Dependencies](#all-dependencies)
+    - [Highest Available Major Version](#highest-available-major-version)
+    - [Specific Dependency Version](#specific-dependency-version)
+    - [Downgrading a Dependency](#downgrading-a-dependency)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
+
 ## Usage
 
 ```
@@ -57,6 +77,8 @@ directory. The [-d directory] flag can be provided to override that behavior.
 
 The [-v] flag turns on verbose output.
 
+## Examples
+
 ### Upgrading the Current Module
 
 #### Incrementing the Major Version
@@ -83,7 +105,7 @@ component in its important path, in which case it would upgrade the module to
 major version `v2` (for example, `github.com/nathanjcochran/upgrade` to
 `github.com/nathanjcochran/upgrade/v2`).
 
-#### Changing the Major Version
+#### Changing to a Specific Major Version
 
 To change the major version of the module in the current working directory to a
 specific major version (for example, to skip immediately to a higher major
