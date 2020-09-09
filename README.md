@@ -1,11 +1,18 @@
 # Upgrade
 
-Tool for upgrading a go dependency's major version.
+Tool for upgrading a go module's major version, or the major version of one of
+its dependencies.
 
 ## Usage
 
 ```
-Usage: upgrade [-d dir] [-v] [module] [version]
+upgrade [-d dir] [-v] [module] [version]
+
+Options:
+  -d string
+    	Module directory path (default ".")
+  -v	verbose output
+```
 
 Upgrades the major version of a module, or the major version of one of its
 dependencies, by editing the module's go.mod file and the corresponding import
@@ -46,9 +53,3 @@ By default, the tool assumes the module being updated is rooted in the current
 directory. The [-d directory] flag can be provided to override that behavior.
 
 The [-v] flag turns on verbose output.
-
-Options:
-  -d string
-    	Module directory path (default ".")
-  -v	verbose output
-```
