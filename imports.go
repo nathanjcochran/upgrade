@@ -60,8 +60,8 @@ func rewriteImports(dir string, upgrades []upgrade) error {
 				importPath := strings.Trim(fileImp.Path.Value, "\"")
 
 				// We have to actually compare module paths, not just import
-				// paths. Imagine upgrading dep to dep/v5, but dep/v3 is
-				// already installed. If we only looked at import paths, we'd
+				// path prefixes. Imagine upgrading dep to dep/v5, but dep/v3
+				// is also installed. If we only looked at import paths, we'd
 				// be liable to get dep/v5/v3, which is invalid. It's difficult
 				// to tell where the module path ends and the package path
 				// begins, so we call out to "go list" (and cache the result).
