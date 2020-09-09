@@ -51,10 +51,11 @@ available matching version, unless the target major version of the dependency
 is already required, in which case it will maintain the existing minor/patch
 version.
 
-NOTE: This tool does not add version tags in any version control systems.
+NOTE: This tool does not add version tags in any version control systems. Its
+only external dependency is the "go list" command.
 
 By default, the tool assumes the module being updated is rooted in the current
-directory. The [-d directory] flag can be provided to override that behavior.
+directory. The [-d dir] flag can be provided to override that behavior.
 
 The [-v] flag turns on verbose output.
 
