@@ -10,6 +10,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 
 	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/module"
@@ -267,7 +268,11 @@ func upgradeAllDependencies(file *modfile.File) {
 	}
 
 	// For each requirement, check if there is a higher major version available
-	var upgrades []upgrade
+	var (
+		upgrades []upgrade
+		wg       = sync.WaitGroup{}
+		lock     = sync.Mutex{}
+	)
 	for _, require := range file.Require {
 
 		// Don't upgrade indirect dependencies (don't have access
@@ -276,57 +281,72 @@ func upgradeAllDependencies(file *modfile.File) {
 			continue
 		}
 
-		version, err := getUpgradeVersion(require.Mod.Path)
-		if err != nil {
-			log.Fatalf("Error getting upgrade version for module %s: %s",
-				require.Mod.Path, err,
-			)
-		}
+		wg.Add(1)
+		go func(require *modfile.Require) {
+			defer wg.Done()
 
-		if version == "" {
-			if *verbose {
-				fmt.Printf("%s - no versions available for upgrade\n", require.Mod.Path)
+			version, err := getUpgradeVersion(require.Mod.Path)
+			if err != nil {
+				log.Fatalf("Error getting upgrade version for module %s: %s",
+					require.Mod.Path, err,
+				)
 			}
-			continue
-		}
 
-		newPath, err := upgradePath(require.Mod.Path, version)
-		if err != nil {
-			log.Fatalf("Error upgrading module path %s to %s: %s",
-				require.Mod.Path, version, err,
-			)
-		}
-
-		existingVersion, exists := required[newPath]
-		if exists {
-			// If the upgraded version already exists as a dependency, maintain
-			// the current minor/patch version
-			version = existingVersion
-		}
-
-		upgrades = append(upgrades, upgrade{
-			oldPath: require.Mod.Path,
-			newPath: newPath,
-		})
-
-		fmt.Printf("%s %s -> %s %s\n", require.Mod.Path, require.Mod.Version, newPath, version)
-
-		// Drop the old module dependency and add the new, upgraded one
-		// NOTE: require.Mod becomes invalid after this operation
-		if err := file.DropRequire(require.Mod.Path); err != nil {
-			log.Fatalf("Error dropping module requirement %s: %s",
-				require.Mod.Path, err,
-			)
-		}
-
-		// Add the upgraded version if it doesn't already exist as a dependency
-		if !exists {
-			if err := file.AddRequire(newPath, version); err != nil {
-				log.Fatalf("Error adding module requirement %s: %s", newPath, err)
+			if version == "" {
+				if *verbose {
+					fmt.Printf("%s - no versions available for upgrade\n", require.Mod.Path)
+				}
+				return
 			}
-			required[newPath] = version
-		}
+
+			newPath, err := upgradePath(require.Mod.Path, version)
+			if err != nil {
+				log.Fatalf("Error upgrading module path %s to %s: %s",
+					require.Mod.Path, version, err,
+				)
+			}
+
+			// Beyond here, several things need to be synchronized:
+			// - Reads/writes to required map
+			// - Writes to upgrades slice
+			// - Modification of the *modfile.File
+			// TODO: Move this logic back into main goroutine, and send
+			// upgrades to it via an upgrade channel
+			lock.Lock()
+			defer lock.Unlock()
+
+			existingVersion, exists := required[newPath]
+			if exists {
+				// If the upgraded version already exists as a dependency, maintain
+				// the current minor/patch version
+				version = existingVersion
+			}
+
+			upgrades = append(upgrades, upgrade{
+				oldPath: require.Mod.Path,
+				newPath: newPath,
+			})
+
+			fmt.Printf("%s %s -> %s %s\n", require.Mod.Path, require.Mod.Version, newPath, version)
+
+			// Drop the old module dependency and add the new, upgraded one
+			// NOTE: require.Mod becomes invalid after this operation
+			if err := file.DropRequire(require.Mod.Path); err != nil {
+				log.Fatalf("Error dropping module requirement %s: %s",
+					require.Mod.Path, err,
+				)
+			}
+
+			// Add the upgraded version if it doesn't already exist as a dependency
+			if !exists {
+				if err := file.AddRequire(newPath, version); err != nil {
+					log.Fatalf("Error adding module requirement %s: %s", newPath, err)
+				}
+				required[newPath] = version
+			}
+		}(require)
 	}
+	wg.Wait()
 
 	if err := rewriteImports(*dir, upgrades); err != nil {
 		log.Fatalf("Error rewriting imports: %s", err)
