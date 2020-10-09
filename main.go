@@ -268,7 +268,6 @@ func upgradeDependency(file *modfile.File, path, version string) {
 	}
 }
 
-// TODO: Make concurrent
 func upgradeAllDependencies(file *modfile.File) {
 	required := map[string]string{}
 	for _, require := range file.Require {
@@ -289,6 +288,9 @@ func upgradeAllDependencies(file *modfile.File) {
 			continue
 		}
 
+		// The getUpgradeVersion function calls 'go list', which can be slow if
+		// the module info isn't already in the module cache. Making those
+		// calls concurrently improves performance.
 		wg.Add(1)
 		go func(require *modfile.Require) {
 			defer wg.Done()

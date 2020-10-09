@@ -26,6 +26,10 @@ type file struct {
 }
 
 func rewriteImports(dir string, upgrades []upgrade) error {
+	if len(upgrades) == 0 {
+		return nil
+	}
+
 	upgradeMap := map[string]string{}
 	for _, upgrade := range upgrades {
 		upgradeMap[upgrade.oldPath] = upgrade.newPath
@@ -155,7 +159,7 @@ func getModulePath(importPath string) (string, error) {
 	result := results[0]
 
 	if result.Error != nil {
-		return "", fmt.Errorf("error getting package info: %s", err)
+		return "", fmt.Errorf("error getting package info: %s", result.Error.Err)
 	}
 
 	// Standard library packages don't have a module
