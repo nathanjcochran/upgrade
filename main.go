@@ -92,6 +92,14 @@ func main() {
 	}
 
 	writeModFile(*dir, file)
+
+	// Run 'go list' after writing the updated go.mod file, in case there are
+	// transitive dependencies that need to be updated in the go.mod file
+	// (otherwise, the user's go.mod file would change again the next time they
+	// ran go install, go get, go list, etc.)
+	if err := list(context.Background()); err != nil {
+		log.Fatalf("Error finalizing transitive dependency versions: %s", err)
+	}
 }
 
 func readModFile(dir string) *modfile.File {
