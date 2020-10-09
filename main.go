@@ -295,6 +295,9 @@ func upgradeAllDependencies(file *modfile.File) {
 		go func(require *modfile.Require) {
 			defer wg.Done()
 
+			if *verbose {
+				fmt.Printf("Fetching %s\n", require.Mod.Path)
+			}
 			version, err := getUpgradeVersion(require.Mod.Path)
 			if err != nil {
 				log.Fatalf("Error getting upgrade version for module %s: %s",
