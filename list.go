@@ -43,7 +43,7 @@ type ModuleError struct {
 
 func listModules(ctx context.Context, modulePaths ...string) ([]Module, error) {
 	cmd := exec.CommandContext(ctx,
-		"go", append([]string{"list", "-m", "-u", "-e", "-json"},
+		"go", append([]string{"list", "-m", "-u", "-e", "-json", "-mod=readonly"},
 			modulePaths...,
 		)...,
 	)
@@ -52,7 +52,7 @@ func listModules(ctx context.Context, modulePaths ...string) ([]Module, error) {
 		if err := err.(*exec.ExitError); err != nil {
 			fmt.Println(string(err.Stderr)) // TODO: Remove
 		}
-		return nil, fmt.Errorf("error executing 'go list -m -u -e -json' command: %s", err)
+		return nil, fmt.Errorf("error executing 'go list -m -u -e -json -mod=readonly' command: %s", err)
 	}
 
 	var results []Module
@@ -60,7 +60,7 @@ func listModules(ctx context.Context, modulePaths ...string) ([]Module, error) {
 	for decoder.More() {
 		var result Module
 		if err := decoder.Decode(&result); err != nil {
-			return nil, fmt.Errorf("error parsing results of 'go list -m -u -e -json' command: %s", err)
+			return nil, fmt.Errorf("error parsing results of 'go list -m -u -e -json -mod=readonly' command: %s", err)
 		}
 		results = append(results, result)
 	}
@@ -135,7 +135,7 @@ type PackageError struct {
 
 func listPackages(ctx context.Context, packagePaths ...string) ([]Package, error) {
 	cmd := exec.CommandContext(ctx,
-		"go", append([]string{"list", "-e", "-json"},
+		"go", append([]string{"list", "-e", "-json", "-mod=readonly"},
 			packagePaths...,
 		)...,
 	)
@@ -144,7 +144,7 @@ func listPackages(ctx context.Context, packagePaths ...string) ([]Package, error
 		if err := err.(*exec.ExitError); err != nil {
 			fmt.Println(string(err.Stderr)) // TODO: Remove
 		}
-		return nil, fmt.Errorf("error executing 'go list -e -json' command: %s", err)
+		return nil, fmt.Errorf("error executing 'go list -e -json -mod=readonly' command: %s", err)
 	}
 
 	var results []Package
@@ -152,7 +152,7 @@ func listPackages(ctx context.Context, packagePaths ...string) ([]Package, error
 	for decoder.More() {
 		var result Package
 		if err := decoder.Decode(&result); err != nil {
-			return nil, fmt.Errorf("error parsing results of 'go list -e -json' command: %s", err)
+			return nil, fmt.Errorf("error parsing results of 'go list -e -json -mod=readonly' command: %s", err)
 		}
 		results = append(results, result)
 	}
