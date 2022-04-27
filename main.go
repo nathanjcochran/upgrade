@@ -483,7 +483,7 @@ func getMinorUpdateVersion(path string) (string, error) {
 	result := results[0]
 
 	if result.Error != nil {
-		return "", fmt.Errorf("error getting module info: %s", path, result.Error.Err)
+		return "", fmt.Errorf("error getting module info: %s", result.Error.Err)
 	}
 
 	if result.Update != nil {
