@@ -1,13 +1,13 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"go/ast"
 	"go/format"
 	"go/token"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/mod/module"
@@ -35,15 +35,19 @@ func rewriteImports(dir string, upgrades []upgrade) error {
 		upgradeMap[upgrade.oldPath] = upgrade.newPath
 	}
 
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("error getting absolute path of module directory: %s", err)
+	}
+
 	pkgs, err := loadPackages(dir)
 	if err != nil {
 		return fmt.Errorf("error loading packages: %s", err)
 	}
 
 	var (
-		modified       = []file{}
-		filesVisited   = map[string]bool{}
-		importToModule = map[string]string{} // Cache of module paths
+		modified     = []file{}
+		filesVisited = map[string]bool{}
 	)
 	for _, pkg := range pkgs {
 		if *verbose {
@@ -52,7 +56,19 @@ func rewriteImports(dir string, upgrades []upgrade) error {
 		for i, fileAST := range pkg.Syntax {
 			filename := pkg.CompiledGoFiles[i]
 
-			// Skip this file if we've already visited it (including test
+			// Skip the file if it isn't located within the module directory.
+			// This is particularly important for preventing changes to "test
+			// binary" files, which are typically located in the user's
+			// $HOME/.cache/go-build/ directory, and should not be modified
+			// (but are returned when loading test packages).
+			// NOTE: This feels a little hacky, but I could not find a more
+			// reliable way to identify the test binary package or ignore its
+			// files. See: https://github.com/nathanjcochran/upgrade/issues/2.
+			if !strings.HasPrefix(filename, absDir) {
+				continue
+			}
+
+			// Skip the file if we've already visited it (including test
 			// packages means some files can appear more than once)
 			if filesVisited[filename] {
 				continue
@@ -66,16 +82,19 @@ func rewriteImports(dir string, upgrades []upgrade) error {
 				// We have to actually compare module paths, not just import
 				// path prefixes. Imagine upgrading dep to dep/v5, but dep/v3
 				// is also installed. If we only looked at import paths, we'd
-				// be liable to get dep/v5/v3, which is invalid. It's difficult
-				// to tell where the module path ends and the package path
-				// begins, so we call out to "go list" (and cache the result).
-				modulePath, exists := importToModule[importPath]
+				// be liable to get dep/v5/v3, which is invalid.
+				impPkg, exists := pkg.Imports[importPath]
 				if !exists {
-					modulePath, err = getModulePath(importPath)
-					if err != nil {
-						return fmt.Errorf("error getting module path for import %s: %s", importPath, err)
-					}
-					importToModule[importPath] = modulePath
+					return fmt.Errorf("error getting package information for import %s: %s", importPath, err)
+				}
+
+				// NOTE: Some imports, such as standard library packages, do
+				// not have a corresponding module. In these case, we default
+				// to the package name as it was specified in the import
+				// statement (it won't be updated).
+				modulePath := importPath
+				if impPkg.Module != nil {
+					modulePath = impPkg.Module.Path
 				}
 
 				if newPath, ok := upgradeMap[modulePath]; ok {
@@ -121,8 +140,14 @@ func rewriteImports(dir string, upgrades []upgrade) error {
 
 func loadPackages(dir string) ([]*packages.Package, error) {
 	cfg := &packages.Config{
-		Mode:  packages.LoadSyntax,
-		Tests: true,
+		Mode: packages.NeedName |
+			packages.NeedCompiledGoFiles |
+			packages.NeedImports |
+			packages.NeedDeps |
+			packages.NeedTypes |
+			packages.NeedSyntax |
+			packages.NeedModule,
+		Tests: true, // Necessary to rewrite imports in _test.go files
 	}
 	loadPath := fmt.Sprintf("%s/...", path.Clean(dir))
 	pkgs, err := packages.Load(cfg, loadPath)
@@ -149,27 +174,4 @@ func writeFile(file file) error {
 	}
 
 	return nil
-}
-
-func getModulePath(importPath string) (string, error) {
-	results, err := listPackages(context.Background(), importPath)
-	if err != nil {
-		return "", fmt.Errorf("error getting package info: %s", err)
-	}
-	result := results[0]
-
-	if result.Error != nil {
-		return "", fmt.Errorf("error getting package info: %s", result.Error.Err)
-	}
-
-	// Standard library packages don't have a module
-	if result.Standard {
-		return importPath, nil
-	}
-
-	if result.Module == nil || result.Module.Path == "" {
-		return "", fmt.Errorf("no module path returned in package info")
-	}
-
-	return result.Module.Path, nil
 }
