@@ -11,6 +11,7 @@ directly call out to any version control systems).
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 ## Table of Contents
 
+- [Installation](#installation)
 - [Usage](#usage)
 - [Examples](#examples)
   - [Upgrading the Current Module](#upgrading-the-current-module)
@@ -25,6 +26,11 @@ directly call out to any version control systems).
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
+## Installation
+
+```
+go install github.com/nathanjcochran/upgrade@latest
+```
 
 ## Usage
 
