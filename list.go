@@ -10,7 +10,7 @@ import (
 )
 
 func list(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, "go", "list", "-mod=mod")
+	cmd := exec.CommandContext(ctx, "go", "list", "-mod=mod", "./...")
 
 	if err := cmd.Run(); err != nil {
 		if err := err.(*exec.ExitError); err != nil {
