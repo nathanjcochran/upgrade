@@ -6,26 +6,6 @@ its dependencies.
 This tool's only external dependency is the `go list` command (it does not
 directly call out to any version control systems).
 
-<!-- doctoc README.md --github --title '## Table of Contents' -->
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-## Table of Contents
-
-- [Installation](#installation)
-- [Usage](#usage)
-- [Examples](#examples)
-  - [Upgrading the Current Module](#upgrading-the-current-module)
-    - [Incrementing the Major Version](#incrementing-the-major-version)
-    - [Changing to a Specific Major Version](#changing-to-a-specific-major-version)
-    - [Downgrading the Major Version](#downgrading-the-major-version)
-  - [Upgrading Dependencies](#upgrading-dependencies)
-    - [All Dependencies](#all-dependencies)
-    - [Highest Available Major Version](#highest-available-major-version)
-    - [Specific Dependency Version](#specific-dependency-version)
-    - [Downgrading a Dependency](#downgrading-a-dependency)
-
-<!-- END doctoc generated TOC please keep comment here to allow auto update -->
-
 ## Installation
 
 ```
