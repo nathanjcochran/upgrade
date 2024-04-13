@@ -399,7 +399,10 @@ func upgradePath(path, version string) (string, error) {
 	return newPath, nil
 }
 
-const batchSize = 5
+// Smaller batch size seems to actually be better sometimes. I think maybe
+// because it prevents the go module proxy from trying to fetch/load too many
+// non-existent major versions? Sticking with 1 for now for simplicity.
+const batchSize = 1
 
 func getUpgradeVersion(path string) (string, error) {
 	// Split module path
@@ -442,11 +445,11 @@ func getUpgradeVersion(path string) (string, error) {
 		version++
 	}
 
-	// TODO: Consider actually upgrading to higher incompatible versions?  Not
+	// TODO: Consider actually upgrading to higher incompatible versions? Not
 	// sure, because that could also be done with go get -u. It just seems
-	// strange if I'm on, say, v1.0.0+incompatible and it wouldnt upgrade me
+	// strange if I'm on, say, v1.0.0+incompatible and it wouldn't upgrade me
 	// to, for example, v2.0.0+incompatible. Would need to ensure it's actually
-	// a higher major than the current version
+	// a higher major than the current version.
 	var upgradeVersion string
 	for {
 		// Make batched calls to 'go list -m' for
