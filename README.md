@@ -52,9 +52,11 @@ provided with any level of major/minor/patch specificity - e.g. `v2`, `v2.3`,
 `v.2.3.4`. When upgrading the current module, only the major component of the
 provided version is taken into account (the minor/patch versions are ignored).
 When upgrading a dependency, the tool will attempt to upgrade to the highest
-available matching version, unless the target major version of the dependency
-is already required, in which case it will maintain the existing minor/patch
-version.
+available matching version. If the target major version of the dependency is
+already required and its existing version matches the provided version at the
+level of specificity given (e.g. `v2` matches any v2.x.y, `v2.3` any v2.3.x),
+the existing minor/patch version is maintained. Otherwise, the existing
+requirement is replaced.
 
 NOTE: This tool does not add version tags in any version control systems. Its
 only external dependency is the `go list` command.
