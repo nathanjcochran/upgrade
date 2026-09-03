@@ -221,7 +221,7 @@ func upgradeDependency(file *modfile.File, path, version string) {
 			found = true
 			oldVersion = require.Mod.Version
 		case newPath:
-			if strings.HasPrefix(require.Mod.Version, version) {
+			if matchesVersion(require.Mod.Version, version) {
 				// Only keep existing version if it matches
 				// the provided version (and/or is more specific)
 				alreadyExists = true
@@ -527,6 +527,22 @@ func upgradePathToVersion(path, version string) (string, string, error) {
 	}
 
 	return "", "", fmt.Errorf("error getting version information: %s", results[0].Error.Err)
+}
+
+// matchesVersion reports whether v matches requested at the level of
+// specificity given: "v2" matches any v2.x.y, "v2.3" any v2.3.x, and "v2.3.4"
+// only itself. An empty requested version matches anything.
+func matchesVersion(v, requested string) bool {
+	switch {
+	case requested == "":
+		return true
+	case semver.Major(requested) == requested:
+		return semver.Major(v) == requested
+	case semver.MajorMinor(requested) == requested:
+		return semver.MajorMinor(v) == requested
+	default:
+		return semver.Compare(v, requested) == 0
+	}
 }
 
 // parsePathMajor returns the major version number encoded in a module path
