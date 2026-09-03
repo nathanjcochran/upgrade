@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"path"
@@ -105,7 +104,7 @@ func main() {
 func readModFile(dir string) *modfile.File {
 	// Read and parse the go.mod file
 	filePath := path.Join(dir, "go.mod")
-	b, err := ioutil.ReadFile(filePath)
+	b, err := os.ReadFile(filePath)
 	if err != nil {
 		log.Fatalf("Error reading module file %s: %s", filePath, err)
 	}
@@ -128,7 +127,7 @@ func writeModFile(dir string, f *modfile.File) {
 	}
 
 	filePath := path.Join(dir, "go.mod")
-	if err := ioutil.WriteFile(filePath, out, 0o644); err != nil {
+	if err := os.WriteFile(filePath, out, 0o644); err != nil {
 		log.Fatalf("Error writing module file %s: %s", filePath, err)
 	}
 }
@@ -452,7 +451,7 @@ func getUpgradeVersion(path string) (string, error) {
 		// Make batched calls to 'go list -m' for
 		// better performance (ideally, a single call).
 		var batch []string
-		for i := 0; i < batchSize; i++ {
+		for range batchSize {
 			modulePath := fmt.Sprintf("%s@v%d", joinPathMajor(prefix, version), version)
 			batch = append(batch, modulePath)
 			version++
