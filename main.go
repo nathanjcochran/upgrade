@@ -128,7 +128,7 @@ func writeModFile(dir string, f *modfile.File) {
 	}
 
 	filePath := path.Join(dir, "go.mod")
-	if err := ioutil.WriteFile(filePath, out, 0644); err != nil {
+	if err := ioutil.WriteFile(filePath, out, 0o644); err != nil {
 		log.Fatalf("Error writing module file %s: %s", filePath, err)
 	}
 }
@@ -377,24 +377,21 @@ func upgradePath(path, version string) (string, error) {
 		if pathMajor == "" {
 			version = "v2"
 		} else {
-			num, err := strconv.Atoi(strings.TrimPrefix(pathMajor, "/v"))
+			num, err := parsePathMajor(pathMajor)
 			if err != nil {
-				return "", fmt.Errorf("invalid major version in module path: %s", pathMajor)
+				return "", err
 			}
-			num++
-			version = fmt.Sprintf("v%d", num)
+			version = fmt.Sprintf("v%d", num+1)
 		}
 	}
 
-	major := semver.Major(version)
-	switch major {
-	case "v0", "v1":
-		return prefix, nil
+	major, err := strconv.Atoi(strings.TrimPrefix(semver.Major(version), "v"))
+	if err != nil {
+		return "", fmt.Errorf("invalid version: %s", version)
 	}
-	newPath := fmt.Sprintf("%s/%s", prefix, major)
+	newPath := joinPathMajor(prefix, major)
 	if err := module.CheckPath(newPath); err != nil {
 		return "", fmt.Errorf("invalid module path after upgrade - %s: %s", newPath, err)
-
 	}
 	return newPath, nil
 }
@@ -416,9 +413,9 @@ func getUpgradeVersion(path string) (string, error) {
 		// If the dependency already has a major version in its import path,
 		// start our search for a higher major version there
 		var err error
-		version, err = strconv.Atoi(strings.TrimPrefix(pathMajor, "/v"))
+		version, err = parsePathMajor(pathMajor)
 		if err != nil {
-			return "", fmt.Errorf("invalid major version '%s': %s", pathMajor, err)
+			return "", err
 		}
 		version++
 	} else {
@@ -456,7 +453,7 @@ func getUpgradeVersion(path string) (string, error) {
 		// better performance (ideally, a single call).
 		var batch []string
 		for i := 0; i < batchSize; i++ {
-			modulePath := fmt.Sprintf("%s/v%d@v%d", prefix, version, version)
+			modulePath := fmt.Sprintf("%s@v%d", joinPathMajor(prefix, version), version)
 			batch = append(batch, modulePath)
 			version++
 		}
@@ -515,10 +512,11 @@ func upgradePathToVersion(path, version string) (string, string, error) {
 		return "", "", fmt.Errorf("error upgrading module path %s to %s: %s", path, version, err)
 	}
 
-	results, err := listModules(context.Background(),
-		fmt.Sprintf("%s@%s", newPath, version), // Module-aware
-		fmt.Sprintf("%s@%s", prefix, version),  // Incompatible
-	)
+	queries := []string{fmt.Sprintf("%s@%s", newPath, version)} // Module-aware
+	if !isGopkgIn(prefix) {
+		queries = append(queries, fmt.Sprintf("%s@%s", prefix, version)) // Incompatible
+	}
+	results, err := listModules(context.Background(), queries...)
 	if err != nil {
 		return "", "", fmt.Errorf("error getting module info: %s", err)
 	}
@@ -530,4 +528,30 @@ func upgradePathToVersion(path, version string) (string, string, error) {
 	}
 
 	return "", "", fmt.Errorf("error getting version information: %s", results[0].Error.Err)
+}
+
+// parsePathMajor returns the major version number encoded in a module path
+// suffix, as returned by module.SplitPathVersion ("/v2" or gopkg.in's ".v2").
+func parsePathMajor(pathMajor string) (int, error) {
+	num, err := strconv.Atoi(strings.TrimPrefix(module.PathMajorPrefix(pathMajor), "v"))
+	if err != nil {
+		return 0, fmt.Errorf("invalid major version in module path: %s", pathMajor)
+	}
+	return num, nil
+}
+
+// joinPathMajor builds a module path from a version-less prefix and a major
+// version. gopkg.in paths always carry a ".vN" suffix, even for v0 and v1.
+func joinPathMajor(prefix string, major int) string {
+	if isGopkgIn(prefix) {
+		return fmt.Sprintf("%s.v%d", prefix, major)
+	}
+	if major < 2 {
+		return prefix
+	}
+	return fmt.Sprintf("%s/v%d", prefix, major)
+}
+
+func isGopkgIn(path string) bool {
+	return strings.HasPrefix(path, "gopkg.in/")
 }
