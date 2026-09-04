@@ -77,6 +77,10 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+	if flag.NArg() > 2 {
+		flag.Usage()
+		os.Exit(2)
+	}
 
 	file := readModFile()
 

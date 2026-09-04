@@ -40,6 +40,8 @@ func rewriteImports(upgrades []upgrade) error {
 	if err != nil {
 		return fmt.Errorf("error getting absolute path of module directory: %s", err)
 	}
+	// Trailing separator so sibling directories sharing a prefix don't match
+	absDir += string(filepath.Separator)
 
 	pkgs, err := loadPackages()
 	if err != nil {
