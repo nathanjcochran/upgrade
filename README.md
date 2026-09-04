@@ -49,7 +49,7 @@ example: `github.com/nathanjcochran/upgrade/v2`.
 
 If `[version]` is given, it must be a valid semver module version. It can be
 provided with any level of major/minor/patch specificity - e.g. `v2`, `v2.3`,
-`v.2.3.4`. When upgrading the current module, only the major component of the
+`v2.3.4`. When upgrading the current module, only the major component of the
 provided version is taken into account (the minor/patch versions are ignored).
 When upgrading a dependency, the tool will attempt to upgrade to the highest
 available matching version. If the target major version of the dependency is
@@ -72,7 +72,7 @@ The `[-v]` flag turns on verbose output.
 
 #### Incrementing the Major Version
 
-To upgrade the major version of the module in the current working directly to
+To upgrade the major version of the module in the current working directory to
 the next logical major version, simply run the `upgrade` without any arguments.
 
 For example, to upgrade `github.com/nathanjcochran/upgrade/v2` to major
@@ -90,7 +90,7 @@ upgrade github.com/nathanjcochran/upgrade/v2
 ```
 
 Note that this would also work if the module didn't yet have the major version
-component in its important path, in which case it would upgrade the module to
+component in its import path, in which case it would upgrade the module to
 major version `v2` (for example, `github.com/nathanjcochran/upgrade` to
 `github.com/nathanjcochran/upgrade/v2`).
 
@@ -129,7 +129,7 @@ the special "all" target for the `[module]` argument:
 upgrade all
 ```
 
-Note that this command can take awhile. This slowness is almost entirely due to
+Note that this command can take a while. This slowness is almost entirely due to
 external calls made to `go list` to find the highest available major version for
 each dependency.
 
@@ -137,7 +137,7 @@ each dependency.
 
 To upgrade the major version of a dependency to the highest available major
 version, provide the module path of the dependency for the `[module]` argument.
-For example, to upgrade `github.com/some/dependency/v2`to the highest available
+For example, to upgrade `github.com/some/dependency/v2` to the highest available
 major version, run:
 
 ```
@@ -169,7 +169,7 @@ if, for example, `v4.3` was available), run:
 upgrade github.com/nathanjcochran/upgrade/v2 v4.2
 ```
 
-To update to a specific patch version, for example `v.4.2.9`, run:
+To update to a specific patch version, for example `v4.2.9`, run:
 
 ```
 upgrade github.com/nathanjcochran/upgrade/v2 v4.2.9

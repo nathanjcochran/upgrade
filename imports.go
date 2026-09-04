@@ -1,13 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
 	"go/format"
 	"go/token"
 	"os"
-	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"golang.org/x/mod/module"
@@ -25,7 +26,7 @@ type file struct {
 	fset *token.FileSet
 }
 
-func rewriteImports(dir string, upgrades []upgrade) error {
+func rewriteImports(upgrades []upgrade) error {
 	if len(upgrades) == 0 {
 		return nil
 	}
@@ -35,12 +36,12 @@ func rewriteImports(dir string, upgrades []upgrade) error {
 		upgradeMap[upgrade.oldPath] = upgrade.newPath
 	}
 
-	absDir, err := filepath.Abs(dir)
+	absDir, err := filepath.Abs(*dir)
 	if err != nil {
 		return fmt.Errorf("error getting absolute path of module directory: %s", err)
 	}
 
-	pkgs, err := loadPackages(dir)
+	pkgs, err := loadPackages()
 	if err != nil {
 		return fmt.Errorf("error loading packages: %s", err)
 	}
@@ -77,7 +78,10 @@ func rewriteImports(dir string, upgrades []upgrade) error {
 
 			var found bool
 			for _, fileImp := range fileAST.Imports {
-				importPath := strings.Trim(fileImp.Path.Value, "\"")
+				importPath, err := strconv.Unquote(fileImp.Path.Value)
+				if err != nil {
+					return fmt.Errorf("error parsing import path %s: %s", fileImp.Path.Value, err)
+				}
 
 				// We have to actually compare module paths, not just import
 				// path prefixes. Imagine upgrading dep to dep/v5, but dep/v3
@@ -85,7 +89,7 @@ func rewriteImports(dir string, upgrades []upgrade) error {
 				// be liable to get dep/v5/v3, which is invalid.
 				impPkg, exists := pkg.Imports[importPath]
 				if !exists {
-					return fmt.Errorf("error getting package information for import %s: %s", importPath, err)
+					return fmt.Errorf("error getting package information for import %s", importPath)
 				}
 
 				// NOTE: Some imports, such as standard library packages, do
@@ -109,7 +113,7 @@ func rewriteImports(dir string, upgrades []upgrade) error {
 					if err := module.CheckImportPath(newImportPath); err != nil {
 						return fmt.Errorf("invalid import path after upgrade: %s", newImportPath)
 					}
-					fileImp.Path.Value = fmt.Sprintf("\"%s\"", newImportPath)
+					fileImp.Path.Value = strconv.Quote(newImportPath)
 
 					if *verbose {
 						fmt.Printf("\t%s -> %s\n", importPath, newImportPath)
@@ -138,8 +142,9 @@ func rewriteImports(dir string, upgrades []upgrade) error {
 	return nil
 }
 
-func loadPackages(dir string) ([]*packages.Package, error) {
+func loadPackages() ([]*packages.Package, error) {
 	cfg := &packages.Config{
+		Dir: *dir,
 		Mode: packages.NeedName |
 			packages.NeedCompiledGoFiles |
 			packages.NeedImports |
@@ -149,8 +154,7 @@ func loadPackages(dir string) ([]*packages.Package, error) {
 			packages.NeedModule,
 		Tests: true, // Necessary to rewrite imports in _test.go files
 	}
-	loadPath := fmt.Sprintf("%s/...", path.Clean(dir))
-	pkgs, err := packages.Load(cfg, loadPath)
+	pkgs, err := packages.Load(cfg, "./...")
 	if err != nil {
 		return nil, fmt.Errorf("error loading package info: %s", err)
 	}
@@ -163,15 +167,15 @@ func loadPackages(dir string) ([]*packages.Package, error) {
 }
 
 func writeFile(file file) error {
-	f, err := os.Create(file.name)
-	if err != nil {
-		return fmt.Errorf("error opening file %s: %s", file.name, err)
+	// Format into memory first, so a formatting error can't leave behind a
+	// truncated file
+	var buf bytes.Buffer
+	if err := format.Node(&buf, file.fset, file.ast); err != nil {
+		return fmt.Errorf("error formatting file %s: %s", file.name, err)
 	}
-	defer f.Close()
 
-	if err := format.Node(f, file.fset, file.ast); err != nil {
+	if err := os.WriteFile(file.name, buf.Bytes(), 0o644); err != nil {
 		return fmt.Errorf("error writing file %s: %s", file.name, err)
 	}
-
 	return nil
 }

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,7 +44,7 @@ example: "github.com/nathanjcochran/upgrade/v2".
 
 If [version] is given, it must be a valid semver module version. It can be
 provided with any level of major/minor/patch specificity - e.g. 'v2', 'v2.3',
-'v.2.3.4'. When upgrading the current module, only the major component of the
+'v2.3.4'. When upgrading the current module, only the major component of the
 provided version is taken into account (the minor/patch versions are ignored).
 When upgrading a dependency, the tool will attempt to upgrade to the highest
 available matching version. If the target major version of the dependency is
@@ -78,7 +78,7 @@ func main() {
 	}
 	flag.Parse()
 
-	file := readModFile(*dir)
+	file := readModFile()
 
 	path := flag.Arg(0)
 	version := flag.Arg(1)
@@ -92,7 +92,7 @@ func main() {
 		upgradeDependency(file, path, version)
 	}
 
-	writeModFile(*dir, file)
+	writeModFile(file)
 
 	// Run 'go list' after writing the updated go.mod file, in case there are
 	// transitive dependencies that need to be updated in the go.mod file
@@ -103,9 +103,9 @@ func main() {
 	}
 }
 
-func readModFile(dir string) *modfile.File {
+func readModFile() *modfile.File {
 	// Read and parse the go.mod file
-	filePath := path.Join(dir, "go.mod")
+	filePath := filepath.Join(*dir, "go.mod")
 	b, err := os.ReadFile(filePath)
 	if err != nil {
 		log.Fatalf("Error reading module file %s: %s", filePath, err)
@@ -119,7 +119,7 @@ func readModFile(dir string) *modfile.File {
 	return file
 }
 
-func writeModFile(dir string, f *modfile.File) {
+func writeModFile(f *modfile.File) {
 	// Format and re-write the module file
 	f.SortBlocks()
 	f.Cleanup()
@@ -128,7 +128,7 @@ func writeModFile(dir string, f *modfile.File) {
 		log.Fatalf("Error formatting module file: %s", err)
 	}
 
-	filePath := path.Join(dir, "go.mod")
+	filePath := filepath.Join(*dir, "go.mod")
 	if err := os.WriteFile(filePath, out, 0o644); err != nil {
 		log.Fatalf("Error writing module file %s: %s", filePath, err)
 	}
@@ -162,7 +162,7 @@ func upgradeModule(file *modfile.File, version string) {
 	}
 
 	// Rewrite import paths in files
-	if err := rewriteImports(*dir, []upgrade{{oldPath: path, newPath: newPath}}); err != nil {
+	if err := rewriteImports([]upgrade{{oldPath: path, newPath: newPath}}); err != nil {
 		log.Fatalf("Error rewriting imports: %s", err)
 	}
 }
@@ -263,7 +263,7 @@ func upgradeDependency(file *modfile.File, path, version string) {
 	// same in case of minor version update)
 	if newPath != path {
 		// Rewrite import paths in files
-		if err := rewriteImports(*dir, []upgrade{{oldPath: path, newPath: newPath}}); err != nil {
+		if err := rewriteImports([]upgrade{{oldPath: path, newPath: newPath}}); err != nil {
 			log.Fatalf("Error rewriting imports: %s", err)
 		}
 	}
@@ -362,7 +362,7 @@ func upgradeAllDependencies(file *modfile.File) {
 	}
 	wg.Wait()
 
-	if err := rewriteImports(*dir, upgrades); err != nil {
+	if err := rewriteImports(upgrades); err != nil {
 		log.Fatalf("Error rewriting imports: %s", err)
 	}
 }

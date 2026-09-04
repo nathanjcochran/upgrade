@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"time"
@@ -11,10 +12,11 @@ import (
 
 func list(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, "go", "list", "-mod=mod", "./...")
+	cmd.Dir = *dir
 
-	if err := cmd.Run(); err != nil {
-		if err := err.(*exec.ExitError); err != nil {
-			fmt.Println(string(err.Stderr)) // TODO: Remove
+	if _, err := cmd.Output(); err != nil {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
+			fmt.Println(string(exitErr.Stderr)) // TODO: Remove
 		}
 		return fmt.Errorf("error executing 'go list' command: %s", err)
 	}
@@ -52,10 +54,11 @@ func listModules(ctx context.Context, modulePaths ...string) ([]Module, error) {
 			modulePaths...,
 		)...,
 	)
+	cmd.Dir = *dir
 	out, err := cmd.Output()
 	if err != nil {
-		if err := err.(*exec.ExitError); err != nil {
-			fmt.Println(string(err.Stderr)) // TODO: Remove
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
+			fmt.Println(string(exitErr.Stderr)) // TODO: Remove
 		}
 		return nil, fmt.Errorf("error executing 'go list -m -u -e -json -mod=readonly' command: %s", err)
 	}
